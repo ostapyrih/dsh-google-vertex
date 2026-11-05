@@ -66,9 +66,10 @@ test('mounting the plugin on a real Context registers both routes and withdraws 
   const llm = new StubLlm(ctx)
 
   const fiber = await ctx.plugin(plugin as unknown as Plugin, { serviceAccountFile: accountPath })
-  assert.deepEqual([...llm.routes.keys()], [plugin.PROVIDER, plugin.GEMINI_PROVIDER])
+  assert.deepEqual([...llm.routes.keys()], [plugin.PROVIDER, plugin.GEMINI_PROVIDER, plugin.DEEPSEEK_PROVIDER])
   assert.equal(llm.routes.get(plugin.PROVIDER)?.constructor.name, 'GoogleVertexAnthropicAdapter')
   assert.equal(llm.routes.get(plugin.GEMINI_PROVIDER)?.constructor.name, 'GoogleVertexGeminiAdapter')
+  assert.equal(llm.routes.get(plugin.DEEPSEEK_PROVIDER)?.constructor.name, 'GoogleVertexDeepSeekAdapter')
 
   // The adapter's own metadata names the project it resolved, which is how the
   // credentials file's project is observable without reading the mount log.

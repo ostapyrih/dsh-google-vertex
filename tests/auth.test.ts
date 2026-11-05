@@ -36,7 +36,7 @@ const ACCOUNT: ServiceAccount = {
 }
 
 test('expandHome resolves the home shorthand and leaves absolute paths alone', () => {
-  assert.match(expandHome('~/.secrets/sa.json'), /\/\.secrets\/sa\.json$/)
+  assert.match(expandHome('~/.secrets/sa.json'), /[/\\]\.secrets[/\\]sa\.json$/)
   assert.equal(expandHome('/tmp/sa.json'), '/tmp/sa.json')
 })
 

@@ -493,6 +493,7 @@ export function parseSseRecord(record: string): Record<string, unknown> | undefi
     cursor = end + 1
   }
   if (!found || payload.length === 0) return undefined
+  if (payload.trim() === '[DONE]') return { done: true }
   try {
     const parsed: unknown = JSON.parse(payload)
     return typeof parsed === 'object' && parsed !== null ? parsed as Record<string, unknown> : undefined

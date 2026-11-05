@@ -122,6 +122,10 @@ export type StreamChunk = {
     readonly index: number;
     readonly text: string;
 } | {
+    readonly type: 'reasoning-delta';
+    readonly index: number;
+    readonly text: string;
+} | {
     readonly type: 'tool-call-delta';
     readonly index: number;
     readonly id: string;

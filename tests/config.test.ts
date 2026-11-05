@@ -11,7 +11,7 @@ import { writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import test, { after } from 'node:test'
 
-import { apply, Config, DEFAULT_MODELS, GEMINI_PROVIDER, PROVIDER, resolveConfig } from '../src/index.ts'
+import { apply, Config, DEEPSEEK_PROVIDER, DEFAULT_MODELS, GEMINI_PROVIDER, PROVIDER, resolveConfig } from '../src/index.ts'
 import { DEFAULT_GEMINI_CONTEXT_WINDOW } from '../src/gemini.ts'
 import type { HostContext } from '../src/host.ts'
 import { DEFAULT_STREAM_IDLE_TIMEOUT_MS, MAX_TIMER_DELAY_MS } from '../src/wire.ts'
@@ -153,7 +153,7 @@ test('a mounted row carries the volatile stamp as a live reference and still res
   } as unknown as HostContext
 
   apply(ctx, mounted)
-  assert.deepEqual(registered, [[PROVIDER], [GEMINI_PROVIDER]])
+  assert.deepEqual(registered, [[PROVIDER], [GEMINI_PROVIDER], [DEEPSEEK_PROVIDER]])
 })
 
 test('apply registers both routes and logs what it read', () => {
@@ -165,8 +165,9 @@ test('apply registers both routes and logs what it read', () => {
   } as unknown as HostContext
 
   apply(ctx, Config({ serviceAccountFile: accountPath }))
-  assert.deepEqual(registered, [[PROVIDER], [GEMINI_PROVIDER]])
+  assert.deepEqual(registered, [[PROVIDER], [GEMINI_PROVIDER], [DEEPSEEK_PROVIDER]])
   assert.match(String(logs[0]), /google-vertex-anthropic/)
   assert.match(String(logs[0]), /google-vertex-gemini/)
+  assert.match(String(logs[0]), /google-vertex-deepseek/)
   assert.match(String(logs[0]), /example-project/)
 })

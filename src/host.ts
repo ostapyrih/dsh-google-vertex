@@ -109,6 +109,7 @@ interface ReplayEnvelope {
 export type StreamChunk =
   | { readonly type: 'block-start'; readonly index: number; readonly blockType: string }
   | { readonly type: 'text-delta'; readonly index: number; readonly text: string }
+  | { readonly type: 'reasoning-delta'; readonly index: number; readonly text: string }
   | { readonly type: 'tool-call-delta'; readonly index: number; readonly id: string; readonly name?: string; readonly argumentsDelta: string }
   | { readonly type: 'block-end'; readonly index: number; readonly block: ContentBlock }
   | { readonly type: 'usage'; readonly usage: TokenUsage }

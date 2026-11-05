@@ -29,6 +29,14 @@ import { GoogleVertexAnthropicAdapter } from './adapter.ts'
 import type { VertexAnthropicConfig, VertexModel } from './adapter.ts'
 import { loadServiceAccount } from './auth.ts'
 import { ServiceAccountTokens } from './auth.ts'
+import {
+  DEFAULT_DEEPSEEK_CONTEXT_WINDOW,
+  DEFAULT_DEEPSEEK_MAX_TOKENS,
+  DEFAULT_DEEPSEEK_MODELS,
+  normalizeDeepSeekModel,
+} from './deepseek.ts'
+import { GoogleVertexDeepSeekAdapter } from './deepseek_adapter.ts'
+import type { DeepSeekAdapterConfig } from './deepseek_adapter.ts'
 import { fetchGeminiModels } from './discovery.ts'
 import { DEFAULT_GEMINI_CONTEXT_WINDOW, DEFAULT_GEMINI_MAX_TOKENS, DEFAULT_GEMINI_MODELS } from './gemini.ts'
 import { GoogleVertexGeminiAdapter } from './gemini_adapter.ts'
@@ -44,6 +52,15 @@ export const PROVIDER = 'google-vertex-anthropic'
 
 /** The `ctx.llm` route serving Gemini models. */
 export const GEMINI_PROVIDER = 'google-vertex-gemini'
+
+/** The `ctx.llm` route serving DeepSeek models in Vertex Model Garden. */
+export const DEEPSEEK_PROVIDER = 'google-vertex-deepseek'
+
+export {
+  DEFAULT_DEEPSEEK_CONTEXT_WINDOW,
+  DEFAULT_DEEPSEEK_MAX_TOKENS,
+  DEFAULT_DEEPSEEK_MODELS,
+}
 
 /**
  * Settings namespace the browser half's card edits: the join key between the
@@ -99,6 +116,8 @@ export interface Config {
   readonly models: string[]
   /** Gemini model ids to advertise, replacing the built-in catalog. */
   readonly geminiModels: string[]
+  /** DeepSeek model ids to advertise, replacing the built-in catalog. */
+  readonly deepseekModels: string[]
   /**
    * Claude context window reported for every model; defaults to 200000. The
    * Gemini route reports {@link DEFAULT_GEMINI_CONTEXT_WINDOW} for every model
@@ -143,6 +162,7 @@ export const Config = Schema.object({
   location: Schema.string().default(DEFAULT_LOCATION),
   models: Schema.array(Schema.string()),
   geminiModels: Schema.array(Schema.string()),
+  deepseekModels: Schema.array(Schema.string()),
   contextWindow: Schema.number().step(1).min(1).default(DEFAULT_CONTEXT_WINDOW),
   maxTokens: Schema.number().step(1).min(1).default(DEFAULT_MAX_TOKENS),
   streamIdleTimeoutMs: Schema.number().min(Number.MIN_VALUE).max(MAX_TIMER_DELAY_MS).default(DEFAULT_STREAM_IDLE_TIMEOUT_MS),
@@ -153,6 +173,7 @@ export const Config = Schema.object({
 interface ResolvedConfig {
   readonly anthropic: VertexAnthropicConfig
   readonly gemini: GeminiAdapterConfig
+  readonly deepseek: DeepSeekAdapterConfig
   /** Absolute path of the service-account file, for the mount log line. */
   readonly serviceAccountFile: string
 }
@@ -213,6 +234,15 @@ export function resolveConfig(config: Options = {}, env: NodeJS.ProcessEnv = pro
     return DEFAULT_GEMINI_MODELS.find(model => model.id === id) ?? { id, name: id }
   })
 
+  const deepseekIds: readonly string[] = filled.deepseekModels === undefined || filled.deepseekModels.length === 0
+    ? DEFAULT_DEEPSEEK_MODELS.map(model => model.id)
+    : filled.deepseekModels
+  const deepseekModels: readonly VertexModel[] = deepseekIds.map((rawId) => {
+    if (rawId.trim().length === 0) throw new Error('google-vertex: deepseekModels ids must be non-empty strings')
+    const id = normalizeDeepSeekModel(rawId)
+    return DEFAULT_DEEPSEEK_MODELS.find(model => model.id === id) ?? { id, name: id }
+  })
+
   const streamIdleTimeoutMs = filled.streamIdleTimeoutMs
 
   return {
@@ -234,11 +264,20 @@ export function resolveConfig(config: Options = {}, env: NodeJS.ProcessEnv = pro
       maxTokens: DEFAULT_GEMINI_MAX_TOKENS,
       streamIdleTimeoutMs,
     },
+    deepseek: {
+      serviceAccount,
+      project,
+      location,
+      models: deepseekModels,
+      contextWindow: DEFAULT_DEEPSEEK_CONTEXT_WINDOW,
+      maxTokens: DEFAULT_DEEPSEEK_MAX_TOKENS,
+      streamIdleTimeoutMs,
+    },
   }
 }
 
 /**
- * Mount both adapters.
+ * Mount all three adapters.
  * @param ctx - host context; `ctx.llm` must be mounted (`inject` guarantees it).
  * @param config - this plugin's row, as the schema emits it.
  */
@@ -247,7 +286,7 @@ export function apply(ctx: HostContext, config: Config): void {
   // host never reads the value, so the plain row is what gets resolved.
   const { revalidatedAt: _revalidation, ...row } = config
   const resolved = resolveConfig(row)
-  const { anthropic, gemini } = resolved
+  const { anthropic, gemini, deepseek } = resolved
 
   // Only the Gemini route discovers: Vertex has no Anthropic listing endpoint,
   // so the Claude catalog is the configured (or built-in) list itself. A
@@ -263,21 +302,25 @@ export function apply(ctx: HostContext, config: Config): void {
 
   const anthropicAdapter = new GoogleVertexAnthropicAdapter(anthropic)
   const geminiAdapter = new GoogleVertexGeminiAdapter(gemini, discoverGemini === undefined ? {} : { discover: discoverGemini })
+  const deepseekAdapter = new GoogleVertexDeepSeekAdapter(deepseek)
   ctx.llm.registerAdapter([PROVIDER], anthropicAdapter)
   ctx.llm.registerAdapter([GEMINI_PROVIDER], geminiAdapter)
+  ctx.llm.registerAdapter([DEEPSEEK_PROVIDER], deepseekAdapter)
 
-  // A profile edit of `revalidatedAt` drops both cached catalogs.
+  // A profile edit of `revalidatedAt` drops all cached catalogs.
   if (typeof ctx.on === 'function') {
     ctx.on('loader/volatile-update', () => {
       anthropicAdapter.invalidateModels()
       geminiAdapter.invalidateModels()
+      deepseekAdapter.invalidateModels()
     })
   }
 
   ctx.logger.info(
-    `google-vertex: providers "${PROVIDER}" and "${GEMINI_PROVIDER}" registered for project ${anthropic.project}`
+    `google-vertex: providers "${PROVIDER}", "${GEMINI_PROVIDER}", and "${DEEPSEEK_PROVIDER}" registered for project ${anthropic.project}`
     + ` (location ${anthropic.location}, credentials ${resolved.serviceAccountFile})`
     + `. Claude: ${anthropic.models.map(model => model.id).join(', ')}`
-    + `. Gemini: ${gemini.models.map(model => model.id).join(', ')}${pinnedGemini ? '' : ' (+ live discovery)'}`,
+    + `. Gemini: ${gemini.models.map(model => model.id).join(', ')}${pinnedGemini ? '' : ' (+ live discovery)'}`
+    + `. DeepSeek: ${deepseek.models.map(model => model.id).join(', ')}`,
   )
 }

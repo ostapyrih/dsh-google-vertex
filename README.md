@@ -1,16 +1,19 @@
 # dsh-google-vertex
 
-One Google service-account JSON file unlocks eleven models inside DeepSeek Harness: Claude Opus 4.6, Sonnet 4.6, Opus 4.5, Sonnet 4.5, Haiku 4.5, plus Gemini 3.5 Flash, 3.1 Pro Preview, 3 Flash Preview, 2.5 Pro, 2.5 Flash, 2.5 Flash-Lite.
+One Google service-account JSON file unlocks Claude, Gemini, and DeepSeek models inside DeepSeek Harness: Claude Opus 4.6, Sonnet 4.6, Opus 4.5, Sonnet 4.5, Haiku 4.5, Gemini 3.5 Flash, 3.1 Pro Preview, 3 Flash Preview, 2.5 Pro, 2.5 Flash, 2.5 Flash-Lite, and DeepSeek models on Vertex Model Garden (DeepSeek-V3, DeepSeek-R1, DeepSeek-V4.1-Flash).
 Install it when your model capacity already lives in a Google Cloud project and you would rather point Harness at a credential file than paste an API key.
 Nothing is copied into the harness credential store: the file is read once at mount, and each request trades a signed RS256 assertion for a cached OAuth token.
 
 ## What you get
 
-- Two provider routes from one configuration row (`google-vertex-anthropic` for Claude and `google-vertex-gemini` for Gemini), both in the Web model picker.
+- Three provider routes from one configuration row (`google-vertex-anthropic` for Claude, `google-vertex-gemini` for Gemini, and `google-vertex-deepseek` for DeepSeek), all in the Web model picker.
 - Service-account auth with no API key: a path in config, or `GOOGLE_APPLICATION_CREDENTIALS`.
-- Streaming with tool calling on both routes. Claude emits raw JSON argument deltas; Gemini emits complete function calls and replays the thought signature Gemini 3 requires.
-- The Gemini catalog discovered from Vertex at runtime behind a five-minute cache, with the built-in list as the fallback when the provider cannot be reached. The Claude catalog is served from the configured (or built-in) list.
-- A **Refresh models** control on this plugin's row page, which drops both caches and re-reads the model picker without restarting `dsh web`.
+- Streaming with tool calling across routes:
+  - Claude emits raw JSON argument deltas.
+  - Gemini emits complete function calls and replays thought signatures.
+  - DeepSeek connects to Vertex Model Garden's OpenAI-compatible completions endpoint, streaming argument deltas and seamlessly mapping DeepSeek-R1 reasoning (`delta.reasoning_content` and streamed `<think>...</think>` tags) to Harness thought blocks.
+- The Gemini catalog discovered from Vertex at runtime behind a five-minute cache, with built-in fallbacks. Claude and DeepSeek catalogs are served from configured (or built-in) lists with alias normalization (`deepseek-v3`, `deepseek-r1`, `deepseek-v4.1-flash`).
+- A **Refresh models** control on this plugin's row page, which drops caches and re-reads the model picker without restarting `dsh web`.
 - Claude prompt-cache breakpoints on tools, system, and the final conversation block, with cache read/write counts reported as usage.
 - Failure codes the harness can act on: `429` → `RATE_LIMIT`, `5xx` → `SERVER`, `RESOURCE_EXHAUSTED` → `QUOTA`, oversized → `CONTEXT_WINDOW_EXCEEDED`, a stalled stream → `TIMEOUT`.
 - Environment fallbacks for the credential, project, and region.
@@ -51,24 +54,26 @@ Override the row by id in `~/.dsh/profiles/web/cordis.patch.yml`:
 | Key | Default | Meaning |
 |---|---|---|
 | `serviceAccountFile` | `$GOOGLE_APPLICATION_CREDENTIALS` | Path to the service-account JSON; `~` is expanded. Nothing is copied into the harness credential store: the file is the credential, and it is read once at mount. |
-| `project` | `$GOOGLE_CLOUD_PROJECT`, `$GCLOUD_PROJECT`, then the file's `project_id` | Google Cloud project id, used by both routes. |
-| `location` | `$GOOGLE_CLOUD_LOCATION`, then `global` | Region for both endpoints, or `global` for `aiplatform.googleapis.com`. |
+| `project` | `$GOOGLE_CLOUD_PROJECT`, `$GCLOUD_PROJECT`, then the file's `project_id` | Google Cloud project id, used by all routes. |
+| `location` | `$GOOGLE_CLOUD_LOCATION`, then `global` | Region for endpoints, or `global` for `aiplatform.googleapis.com`. Note: DeepSeek Model Garden endpoints typically run in regions such as `us-central1`. |
 | `models` | the Claude catalog below | Claude ids to advertise, replacing the built-in catalog. Any id is accepted at request time regardless. |
 | `geminiModels` | the Gemini catalog below | Gemini ids to advertise, served as written: a configured list turns live discovery off. Every entry serves the same context/output pair. |
+| `deepseekModels` | the DeepSeek catalog below | DeepSeek ids to advertise, replacing the built-in catalog. Any id is accepted at request time regardless. |
 | `contextWindow` | `200000` | Claude context window reported per model. |
 | `maxTokens` | `32000` | Claude output cap applied when a caller omits one. |
-| `streamIdleTimeoutMs` | `300000` | Bound on the interval between two stream reads, on both routes. |
+| `streamIdleTimeoutMs` | `300000` | Bound on the interval between two stream reads, on all routes. |
 
 Environment variables are read from `process.env` of the harness process.
 
 ## Routes and models
 
-Vertex serves the two publishers over different paths, which is why one row registers two routes. The service-account path, project, and region are written once.
+Vertex serves models over different API shapes, which is why one row registers three routes. The service-account path, project, and region are configured once.
 
 | Route | Provider path | Serves |
 |---|---|---|
 | `google-vertex-anthropic` | `publishers/anthropic/models/{model}:streamRawPredict` | Claude, picker group **Google Vertex AI (Anthropic)** |
 | `google-vertex-gemini` | `publishers/google/models/{model}:streamGenerateContent?alt=sse` | Gemini, picker group **Google Vertex AI (Gemini)** |
+| `google-vertex-deepseek` | `endpoints/openapi/chat/completions` | DeepSeek, picker group **Google Vertex AI (DeepSeek)** |
 
 Claude defaults. Every listed family serves 200k context and caps output at 32k unless a caller asks otherwise:
 
@@ -92,6 +97,16 @@ Gemini defaults. Every entry serves the same context/output pair:
 | Gemini 2.5 Flash-Lite (Vertex) | `gemini-2.5-flash-lite` | 1,048,576 | 65,535 |
 
 The Gemini cap is one below Vertex's own ceiling on purpose: `maxOutputTokens: 65536` is refused with "supported range is from 1 (inclusive) to 65536 (exclusive)".
+
+DeepSeek defaults on Vertex Model Garden:
+
+| Picker label | Model id | Aliases | Context | Max output |
+|---|---|---|---|---|
+| DeepSeek-V3 (Vertex Model Garden) | `deepseek-ai/DeepSeek-V3` | `deepseek-v3` | 128,000 | 16,384 |
+| DeepSeek-R1 (Vertex Model Garden) | `deepseek-ai/DeepSeek-R1` | `deepseek-r1` | 128,000 | 16,384 |
+| DeepSeek-V4.1-Flash (Vertex Model Garden) | `deepseek-v4.1-flash-maas` | `deepseek-v4.1-flash` | 1,000,000 | 16,384 |
+
+DeepSeek-R1 reasoning tokens and inline `<think>...</think>` tags are translated into Harness reasoning blocks seamlessly. Streaming tool calling is fully supported.
 
 Ids are Vertex's aliases, so a promoted release needs no edit here. Both catalogs are overridable from configuration for a deployment that pins dated versions.
 

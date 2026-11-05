@@ -8,7 +8,7 @@
   "type": "module",
   "main": "lib/index.js",
   "types": "lib/types/index.d.ts",
-  "description": "Google Vertex AI provider for DeepSeek Harness: service-account auth for Google-hosted Claude and Gemini models",
+  "description": "Google Vertex AI provider for DeepSeek Harness: service-account auth for Claude, Gemini, and DeepSeek models",
   "license": "MIT",
   "exports": {
     ".": {

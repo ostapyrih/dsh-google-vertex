@@ -25,6 +25,8 @@
 import type { Volatile } from '@deepseek-ai/cordis';
 import Schema from '@deepseek-ai/schemastery';
 import type { VertexAnthropicConfig, VertexModel } from './adapter.ts';
+import { DEFAULT_DEEPSEEK_CONTEXT_WINDOW, DEFAULT_DEEPSEEK_MAX_TOKENS, DEFAULT_DEEPSEEK_MODELS } from './deepseek.ts';
+import type { DeepSeekAdapterConfig } from './deepseek_adapter.ts';
 import type { GeminiAdapterConfig } from './gemini_adapter.ts';
 import type { HostContext } from './host.ts';
 /** Plugin name as it appears in the loader. */
@@ -33,6 +35,9 @@ export declare const name = "google-vertex";
 export declare const PROVIDER = "google-vertex-anthropic";
 /** The `ctx.llm` route serving Gemini models. */
 export declare const GEMINI_PROVIDER = "google-vertex-gemini";
+/** The `ctx.llm` route serving DeepSeek models in Vertex Model Garden. */
+export declare const DEEPSEEK_PROVIDER = "google-vertex-deepseek";
+export { DEFAULT_DEEPSEEK_CONTEXT_WINDOW, DEFAULT_DEEPSEEK_MAX_TOKENS, DEFAULT_DEEPSEEK_MODELS, };
 /**
  * Settings namespace the browser half's card edits: the join key between the
  * two halves. The card registers into `plugins.row.config` under this namespace,
@@ -76,6 +81,8 @@ export interface Config {
     readonly models: string[];
     /** Gemini model ids to advertise, replacing the built-in catalog. */
     readonly geminiModels: string[];
+    /** DeepSeek model ids to advertise, replacing the built-in catalog. */
+    readonly deepseekModels: string[];
     /**
      * Claude context window reported for every model; defaults to 200000. The
      * Gemini route reports {@link DEFAULT_GEMINI_CONTEXT_WINDOW} for every model
@@ -120,6 +127,7 @@ export declare const Config: Schema<Schemastery.ObjectS<NoInfer<{
     location: Schema<string, string, "defined">;
     models: Schema<string[], string[], "plain">;
     geminiModels: Schema<string[], string[], "plain">;
+    deepseekModels: Schema<string[], string[], "plain">;
     contextWindow: Schema<number, number, "defined">;
     maxTokens: Schema<number, number, "defined">;
     streamIdleTimeoutMs: Schema<number, number, "defined">;
@@ -130,6 +138,7 @@ export declare const Config: Schema<Schemastery.ObjectS<NoInfer<{
     location: Schema<string, string, "defined">;
     models: Schema<string[], string[], "plain">;
     geminiModels: Schema<string[], string[], "plain">;
+    deepseekModels: Schema<string[], string[], "plain">;
     contextWindow: Schema<number, number, "defined">;
     maxTokens: Schema<number, number, "defined">;
     streamIdleTimeoutMs: Schema<number, number, "defined">;
@@ -139,6 +148,7 @@ export declare const Config: Schema<Schemastery.ObjectS<NoInfer<{
 interface ResolvedConfig {
     readonly anthropic: VertexAnthropicConfig;
     readonly gemini: GeminiAdapterConfig;
+    readonly deepseek: DeepSeekAdapterConfig;
     /** Absolute path of the service-account file, for the mount log line. */
     readonly serviceAccountFile: string;
 }
@@ -153,9 +163,8 @@ interface ResolvedConfig {
  */
 export declare function resolveConfig(config?: Options, env?: NodeJS.ProcessEnv): ResolvedConfig;
 /**
- * Mount both adapters.
+ * Mount all three adapters.
  * @param ctx - host context; `ctx.llm` must be mounted (`inject` guarantees it).
  * @param config - this plugin's row, as the schema emits it.
  */
 export declare function apply(ctx: HostContext, config: Config): void;
-export {};
