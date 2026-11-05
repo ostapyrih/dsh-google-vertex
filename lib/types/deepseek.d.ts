@@ -21,6 +21,7 @@ export declare const DEFAULT_DEEPSEEK_CONTEXT_WINDOW = 128000;
 export declare const DEFAULT_DEEPSEEK_MAX_TOKENS = 16384;
 /**
  * Built-in DeepSeek models served on Vertex AI Model Garden.
+ * Only Serverless MaaS models available on-demand without dedicated GPU cluster provisioning.
  */
 export declare const DEFAULT_DEEPSEEK_MODELS: readonly VertexModel[];
 /**

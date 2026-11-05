@@ -36,10 +36,8 @@ const WIRE: VertexWireConfig = {
 test('DEFAULT_DEEPSEEK_MODELS and capacities are exported correctly', () => {
   assert.equal(DEFAULT_DEEPSEEK_CONTEXT_WINDOW, 128_000)
   assert.equal(DEFAULT_DEEPSEEK_MAX_TOKENS, 16_384)
-  assert.equal(DEFAULT_DEEPSEEK_MODELS.length, 3)
-  assert.equal(DEFAULT_DEEPSEEK_MODELS[0]?.id, 'deepseek-ai/DeepSeek-V3')
-  assert.equal(DEFAULT_DEEPSEEK_MODELS[1]?.id, 'deepseek-ai/DeepSeek-R1')
-  assert.equal(DEFAULT_DEEPSEEK_MODELS[2]?.id, 'deepseek-ai/deepseek-v4.1-flash-maas')
+  assert.equal(DEFAULT_DEEPSEEK_MODELS.length, 1)
+  assert.equal(DEFAULT_DEEPSEEK_MODELS[0]?.id, 'deepseek-ai/deepseek-v4.1-flash-maas')
 })
 
 test('normalizeDeepSeekModel handles aliases and preserves custom IDs', () => {
@@ -49,10 +47,12 @@ test('normalizeDeepSeekModel handles aliases and preserves custom IDs', () => {
   assert.equal(normalizeDeepSeekModel('deepseek-r1'), 'deepseek-ai/DeepSeek-R1')
   assert.equal(normalizeDeepSeekModel('DeepSeek-R1'), 'deepseek-ai/DeepSeek-R1')
   assert.equal(normalizeDeepSeekModel('deepseek-ai/deepseek-r1'), 'deepseek-ai/DeepSeek-R1')
+  assert.equal(normalizeDeepSeekModel('deepseek-v4'), 'deepseek-ai/deepseek-v4.1-flash-maas')
+  assert.equal(normalizeDeepSeekModel('deepseek-v4.1'), 'deepseek-ai/deepseek-v4.1-flash-maas')
   assert.equal(normalizeDeepSeekModel('deepseek-v4.1-flash'), 'deepseek-ai/deepseek-v4.1-flash-maas')
   assert.equal(normalizeDeepSeekModel('deepseek-ai/deepseek-v4.1-flash-maas'), 'deepseek-ai/deepseek-v4.1-flash-maas')
   assert.equal(normalizeDeepSeekModel('custom-model-id'), 'custom-model-id')
-  assert.equal(normalizeDeepSeekModel(''), 'deepseek-ai/DeepSeek-V3')
+  assert.equal(normalizeDeepSeekModel(''), 'deepseek-ai/deepseek-v4.1-flash-maas')
 })
 
 test('deepseekEndpointFor formats the Vertex Model Garden endpoint', () => {

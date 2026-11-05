@@ -175,11 +175,14 @@ function isClaudeTextModel(id: string): boolean {
 }
 
 /**
- * True for a DeepSeek id the OpenAI-compatible MaaS route can drive.
+ * True for a DeepSeek id the OpenAI-compatible Serverless MaaS route can drive.
+ * Filters out models that require dedicated GKE / Vertex GPU cluster deployment.
  * @param id - bare model id.
  */
 function isDeepSeekChatModel(id: string): boolean {
-  return !id.split('-').some(segment => NON_CHAT_DEEPSEEK_SEGMENTS.has(segment))
+  const lower = id.toLowerCase()
+  return (lower.includes('flash-maas') || lower.endsWith('-maas'))
+    && !id.split('-').some(segment => NON_CHAT_DEEPSEEK_SEGMENTS.has(segment))
 }
 
 /**
@@ -358,12 +361,12 @@ export function fetchClaudeModels(
  * @param signal - caller cancellation.
  * @returns model ids and display names, in catalog order.
  */
-export function fetchDeepSeekModels(
+export async function fetchDeepSeekModels(
   tokens: TokenProvider,
   fetchFn: FetchLike,
   signal?: AbortSignal,
 ): Promise<readonly VertexModel[]> {
-  return fetchPublisherModels(
+  const models = await fetchPublisherModels(
     DEEPSEEK_PUBLISHER,
     MAAS_CATALOG_LOCATION,
     tokens,
@@ -372,6 +375,10 @@ export function fetchDeepSeekModels(
     id => `${deepseekDisplayName(id)} (Vertex Model Garden)`,
     signal,
   )
+  return models.map(m => ({
+    id: m.id.startsWith('deepseek-ai/') ? m.id : `deepseek-ai/${m.id}`,
+    name: m.name,
+  }))
 }
 
 /**

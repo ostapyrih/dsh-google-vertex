@@ -5,6 +5,12 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.16.4] - 2026-11-05
+
+### Fixed
+- **Filter non-serverless DeepSeek models from catalog**: The Vertex Model Garden publisher catalog returned recipes for dedicated GKE/GPU deployments (e.g. `deepseek-r1`, `deepseek-v3`, `deepseek-v4`), which are not available on Serverless MaaS and failed with HTTP 400/404. Model discovery and defaults now filter to only valid Serverless MaaS models (`deepseek-ai/deepseek-v4.1-flash-maas`).
+- **Normalized bare DeepSeek model IDs**: All variants of `deepseek-v4*` and bare names without a publisher prefix are now properly normalized to canonical `<publisher>/<model>` identifiers to avoid `Malformed publisher model` errors from Vertex.
+
 ## [0.16.3] - 2026-11-05
 
 ### Fixed

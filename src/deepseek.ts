@@ -34,10 +34,9 @@ export const DEFAULT_DEEPSEEK_MAX_TOKENS = 16_384
 
 /**
  * Built-in DeepSeek models served on Vertex AI Model Garden.
+ * Only Serverless MaaS models available on-demand without dedicated GPU cluster provisioning.
  */
 export const DEFAULT_DEEPSEEK_MODELS: readonly VertexModel[] = [
-  { id: 'deepseek-ai/DeepSeek-V3', name: 'DeepSeek-V3 (Vertex Model Garden)' },
-  { id: 'deepseek-ai/DeepSeek-R1', name: 'DeepSeek-R1 (Vertex Model Garden)' },
   { id: 'deepseek-ai/deepseek-v4.1-flash-maas', name: 'DeepSeek-V4.1-Flash (Vertex Model Garden)' },
 ]
 
@@ -58,13 +57,18 @@ export function normalizeDeepSeekModel(model: string): string {
     return 'deepseek-ai/DeepSeek-R1'
   }
   if (
-    lower === 'deepseek-v4.1-flash'
+    lower.startsWith('deepseek-v4')
+    || lower.startsWith('deepseek-ai/deepseek-v4')
+    || lower === 'deepseek-v4.1-flash'
     || lower === 'deepseek-v4-1-flash'
     || lower === 'deepseek-v4.1-flash-maas'
     || lower === 'deepseek-ai/deepseek-v4.1-flash'
     || lower === 'deepseek-ai/deepseek-v4.1-flash-maas'
   ) {
     return 'deepseek-ai/deepseek-v4.1-flash-maas'
+  }
+  if (!trimmed.includes('/') && lower.startsWith('deepseek-')) {
+    return `deepseek-ai/${trimmed}`
   }
   return trimmed
 }
