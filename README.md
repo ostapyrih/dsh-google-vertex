@@ -20,34 +20,49 @@ Nothing is copied into the harness credential store: the file is read once at mo
 
 ## Install
 
-Requires DeepSeek Harness `>=0.2.2-alpha.3 <0.3.0`. Restart DSH and refresh the browser after upgrading.
+Requires DeepSeek Harness `>=0.2.0 <0.3.0`.
 
-> **Install it as a bundle.** `dsh plugin add …` mounts the row from the
-> package's own patch layer, which is what the settings editor can write to. A
-> row added with `--patch` is an overlay: it disappears at the next start, and
-> the Plugins card cannot save into it (the editor refuses a write an overlay
-> would win).
+You can install the plugin either directly from your local checkout or from the GitHub fork into your active DSH profile (`desktop` for the desktop application, or `web` for `dsh web`):
+
+### Option A: Install from local checkout (Recommended for development)
+
+Point DSH at your local repository directory:
 
 ```sh
-dsh plugin --profile web add --save-exact @maci0/dsh-google-vertex@0.14.2
+# For the desktop application profile:
+dsh plugin --profile desktop add C:\Users\ostap\Projects\dsh-google-vertex
+
+# Or for the web profile:
+dsh plugin --profile web add C:\Users\ostap\Projects\dsh-google-vertex
 ```
 
-Pin an exact npm version. To upgrade, run the same command with the newer
-version, then restart `dsh web` (bundle layers compose at boot).
+### Option B: Install from GitHub fork
 
-The package declares `dsh.bundle`, so `dsh plugin` appends it to `dsh.profile.bundles` and the package's own `cordis.patch.yml` inserts the `google-vertex` row: there is no row to paste. Adding that row by hand while the package is a bundle mounts the plugin twice, because `insert` does not dedupe ids.
+```sh
+# For the desktop application profile:
+dsh plugin --profile desktop add github:ostapyrih/dsh-google-vertex
+
+# Or for the web profile:
+dsh plugin --profile web add github:ostapyrih/dsh-google-vertex
+```
+
+The package declares `dsh.bundle`, so `dsh plugin add` automatically adds it to `dsh.profile.bundles` and the bundle's `cordis.patch.yml` registers the `google-vertex` row. Restart DeepSeek Harness after installation.
 
 ## Configure
 
-Override the row by id in `~/.dsh/profiles/web/cordis.patch.yml`:
+Override the row configuration by editing `cordis.patch.yml` in your profile directory:
+- Desktop app: `~/.dsh/profiles/desktop/cordis.patch.yml`
+- Web app: `~/.dsh/profiles/web/cordis.patch.yml`
 
 ```yaml
 - id: google-vertex
   config:
-    serviceAccountFile: ~/.secrets/global-claude-project.json
-    project: global-claude-project
-    location: global
+    serviceAccountFile: ~/.secrets/my-gcp-key.json
+    project: my-gcp-project-id
+    location: us-central1
 ```
+
+> **Note on location:** DeepSeek Model Garden endpoints typically run in specific regions such as `us-central1`. Claude is supported in regions like `us-east5` and `europe-west1` (or `global`). When using DeepSeek, set `location` to your Vertex AI region.
 
 `~` is expanded, and the file is read once at mount, so a typo fails loudly instead of mid-turn. A patch replaces the targeted row's whole `config`, so restate every key you keep. This file is live-watched: saving it remounts the plugin, no restart.
 
