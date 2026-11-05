@@ -1,6 +1,11 @@
 {
-  "name": "@maci0/dsh-google-vertex",
-  "version": "0.14.2",
+  "name": "@ostapyrih/dsh-google-vertex",
+  "version": "0.15.0",
+  "author": "ostapyrih <https://github.com/ostapyrih>",
+  "homepage": "https://github.com/ostapyrih/dsh-google-vertex#readme",
+  "bugs": {
+    "url": "https://github.com/ostapyrih/dsh-google-vertex/issues"
+  },
   "publishConfig": {
     "access": "public",
     "registry": "https://registry.npmjs.org/"
@@ -83,7 +88,7 @@
   },
   "repository": {
     "type": "git",
-    "url": "https://github.com/maci0/dsh-google-vertex.git"
+    "url": "https://github.com/ostapyrih/dsh-google-vertex.git"
   },
   "icon": "./icon.svg",
   "dependencies": {

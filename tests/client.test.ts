@@ -116,7 +116,7 @@ function loadBundle(snapshot: Snapshot, writes: unknown[][], accepted = true) {
   }
 
   assert.ok(registration, 'the bundle registered itself on window.__ModuleLoader__')
-  assert.equal(registration.id, '@maci0/dsh-google-vertex')
+  assert.equal(registration.id, '@ostapyrih/dsh-google-vertex')
 
   const exported = registration.factory(requireFn)
   ;(exported['apply'] as (ctx: unknown) => void)(ctx)
@@ -180,7 +180,7 @@ test('the card claims the row slot for the google-vertex row and binds the share
   assert.equal(registered[0]?.entry['name'], 'plugins.row.config')
   // `rowConfigKey(<package name>, <row id>)`: the configure control appears on
   // the row this key names, and nowhere else.
-  assert.equal(registered[0]?.entry['key'], '@maci0/dsh-google-vertex#google-vertex')
+  assert.equal(registered[0]?.entry['key'], '@ostapyrih/dsh-google-vertex#google-vertex')
   assert.equal(registered[0]?.entry['locale'], 'google-vertex')
 })
 
@@ -189,7 +189,7 @@ test('the summary view is the one-liner the page prints under the row', () => {
 
   assert.equal(
     raw(react, cardOf(registered), 'summary'),
-    'Google-hosted Claude and Gemini models, discovered from Vertex at runtime.',
+    'Google-hosted Claude, Gemini, and DeepSeek models, discovered from Vertex at runtime.',
   )
 })
 

@@ -9,7 +9,7 @@
 #   google-vertex-deepseek:  DeepSeek (Model Garden / Serverless MaaS)
 - insert:
     - id: google-vertex
-      name: '@maci0/dsh-google-vertex'
+      name: '@ostapyrih/dsh-google-vertex'
       config:
         # Service-account JSON path ('~' allowed). Left unset here so the
         # $GOOGLE_APPLICATION_CREDENTIALS fallback applies; a deployment that
