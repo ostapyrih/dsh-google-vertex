@@ -38,7 +38,7 @@ export const DEFAULT_DEEPSEEK_MAX_TOKENS = 16_384
 export const DEFAULT_DEEPSEEK_MODELS: readonly VertexModel[] = [
   { id: 'deepseek-ai/DeepSeek-V3', name: 'DeepSeek-V3 (Vertex Model Garden)' },
   { id: 'deepseek-ai/DeepSeek-R1', name: 'DeepSeek-R1 (Vertex Model Garden)' },
-  { id: 'deepseek-v4.1-flash-maas', name: 'DeepSeek-V4.1-Flash (Vertex Model Garden)' },
+  { id: 'deepseek-ai/deepseek-v4.1-flash-maas', name: 'DeepSeek-V4.1-Flash (Vertex Model Garden)' },
 ]
 
 /**
@@ -64,7 +64,7 @@ export function normalizeDeepSeekModel(model: string): string {
     || lower === 'deepseek-ai/deepseek-v4.1-flash'
     || lower === 'deepseek-ai/deepseek-v4.1-flash-maas'
   ) {
-    return 'deepseek-v4.1-flash-maas'
+    return 'deepseek-ai/deepseek-v4.1-flash-maas'
   }
   return trimmed
 }

@@ -53,7 +53,7 @@ test('model metadata normalizes aliases and reports capacities', async () => {
   assert.equal(r1.defaultMaxTokens, 16_384)
 
   const flash = await adapter.resolveModel('google-vertex-deepseek', 'deepseek-v4.1-flash')
-  assert.equal(flash.id, 'deepseek-v4.1-flash-maas')
+  assert.equal(flash.id, 'deepseek-ai/deepseek-v4.1-flash-maas')
   assert.equal(flash.name, 'DeepSeek-V4.1-Flash (Vertex Model Garden)')
   assert.equal(flash.context?.contextWindow, 1_000_000)
   assert.equal(flash.defaultMaxTokens, 16_384)

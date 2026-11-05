@@ -111,7 +111,7 @@ DeepSeek defaults on Vertex Model Garden:
 |---|---|---|---|---|
 | DeepSeek-V3 (Vertex Model Garden) | `deepseek-ai/DeepSeek-V3` | `deepseek-v3` | 128,000 | 16,384 |
 | DeepSeek-R1 (Vertex Model Garden) | `deepseek-ai/DeepSeek-R1` | `deepseek-r1` | 128,000 | 16,384 |
-| DeepSeek-V4.1-Flash (Vertex Model Garden) | `deepseek-v4.1-flash-maas` | `deepseek-v4.1-flash` | 1,000,000 | 16,384 |
+| DeepSeek-V4.1-Flash (Vertex Model Garden) | `deepseek-ai/deepseek-v4.1-flash-maas` | `deepseek-v4.1-flash` | 1,000,000 | 16,384 |
 
 DeepSeek-R1 reasoning tokens and inline `<think>...</think>` tags are translated into Harness reasoning blocks seamlessly. Streaming tool calling is fully supported.
 
