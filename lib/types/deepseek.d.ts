@@ -91,6 +91,30 @@ export interface DeepSeekRequestBody {
     tools?: OpenAITool[];
 }
 /**
+ * Strip DeepSeek-specific markup language (DSML) tags and special tokens that
+ * can leak into tool arguments or content from Vertex Model Garden's backend parser.
+ *
+ * Examples of leaked artifacts:
+ * - `</｜DSML｜ parameter>` or `<｜DSML｜ parameter ...>`
+ * - `<｜tool call begin｜>`, `<｜tool call end｜>`, `<｜tool sep｜>`
+ * - `<｜...｜>` and `<|...|>`
+ * - `</parameter>` or `</DSML>`
+ * @param text - string that may contain leaked DSML tokens.
+ * @returns cleaned string.
+ */
+export declare function sanitizeDeepSeekText(text: string): string;
+/**
+ * Filter out tools requiring vision/multimodal capabilities that text-only DeepSeek
+ * on Vertex Model Garden cannot execute (e.g. `read_image`). Exposing `read_image`
+ * biases DeepSeek to call it instead of `read`, triggering repetitive failure loops.
+ * @param tool - tool definition from harness.
+ * @returns true if the tool can be safely served to DeepSeek.
+ */
+export declare function isSupportedDeepSeekTool(tool: {
+    name: string;
+    description: string;
+}): boolean;
+/**
  * Build the OpenAI Chat Completions payload for Vertex Model Garden DeepSeek.
  * @param options - harness generate options.
  * @param config - project wire configuration.

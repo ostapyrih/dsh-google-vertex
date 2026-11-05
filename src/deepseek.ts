@@ -195,6 +195,44 @@ function formatMessages(options: GenerateOptions): OpenAIMessage[] {
 }
 
 /**
+ * Strip DeepSeek-specific markup language (DSML) tags and special tokens that
+ * can leak into tool arguments or content from Vertex Model Garden's backend parser.
+ *
+ * Examples of leaked artifacts:
+ * - `</｜DSML｜ parameter>` or `<｜DSML｜ parameter ...>`
+ * - `<｜tool call begin｜>`, `<｜tool call end｜>`, `<｜tool sep｜>`
+ * - `<｜...｜>` and `<|...|>`
+ * - `</parameter>` or `</DSML>`
+ * @param text - string that may contain leaked DSML tokens.
+ * @returns cleaned string.
+ */
+export function sanitizeDeepSeekText(text: string): string {
+  if (text.length === 0) return text
+  return text
+    // Strip DSML parameter tags (with fullwidth or standard pipe, self-closing or not)
+    .replace(/<[/／]?[｜|]?\s*DSML\s*[｜|]?[^>]*>/gi, '')
+    // Strip standalone </parameter> tags
+    .replace(/<[/／]parameter\s*>/gi, '')
+    // Strip DeepSeek special token delimiters <｜...｜>
+    .replace(/<[｜|][^｜|>]+[｜|]>/g, '')
+}
+
+/**
+ * Filter out tools requiring vision/multimodal capabilities that text-only DeepSeek
+ * on Vertex Model Garden cannot execute (e.g. `read_image`). Exposing `read_image`
+ * biases DeepSeek to call it instead of `read`, triggering repetitive failure loops.
+ * @param tool - tool definition from harness.
+ * @returns true if the tool can be safely served to DeepSeek.
+ */
+export function isSupportedDeepSeekTool(tool: { name: string; description: string }): boolean {
+  const name = tool.name.toLowerCase()
+  if (name === 'read_image' || name === 'view_image' || name === 'inspect_image') {
+    return false
+  }
+  return true
+}
+
+/**
  * Build the OpenAI Chat Completions payload for Vertex Model Garden DeepSeek.
  * @param options - harness generate options.
  * @param config - project wire configuration.
@@ -205,14 +243,16 @@ export function buildDeepSeekRequest(options: GenerateOptions, config: DeepSeekW
   const messages = formatMessages(options)
 
   const tools: OpenAITool[] | undefined = options.tools && options.tools.length > 0
-    ? options.tools.map(tool => ({
-        type: 'function' as const,
-        function: {
-          name: tool.name,
-          description: tool.description,
-          parameters: tool.parameters,
-        },
-      }))
+    ? options.tools
+        .filter(isSupportedDeepSeekTool)
+        .map(tool => ({
+          type: 'function' as const,
+          function: {
+            name: tool.name,
+            description: tool.description,
+            parameters: tool.parameters,
+          },
+        }))
     : undefined
 
   const maxTokens = options.maxTokens ?? config.maxTokens
@@ -452,6 +492,7 @@ export class DeepSeekStreamTranslator {
 
     // Close all open tool calls
     for (const active of this.#toolCalls.values()) {
+      const sanitized = sanitizeDeepSeekText(active.arguments)
       out.push({
         type: 'block-end',
         index: active.blockIndex,
@@ -459,7 +500,7 @@ export class DeepSeekStreamTranslator {
           type: 'tool-call',
           id: active.id,
           name: active.name,
-          arguments: active.arguments.length > 0 ? active.arguments : '{}',
+          arguments: sanitized.length > 0 ? sanitized : '{}',
         },
       })
       this.#blocksEmitted = true
@@ -550,7 +591,9 @@ export class DeepSeekStreamTranslator {
    * Handles tags split across multiple chunks.
    */
   #processContentWithThinkTags(chunk: string): StreamChunk[] {
-    let input = this.#tagBuffer + chunk
+    const cleanChunk = sanitizeDeepSeekText(chunk)
+    if (cleanChunk.length === 0) return []
+    let input = this.#tagBuffer + cleanChunk
     this.#tagBuffer = ''
     const out: StreamChunk[] = []
 
@@ -635,7 +678,8 @@ export class DeepSeekStreamTranslator {
     const tIndex = typeof tc['index'] === 'number' ? tc['index'] : 0
     const fn = typeof tc['function'] === 'object' && tc['function'] !== null
       ? tc['function'] as Record<string, unknown> : undefined
-    const argsDelta = typeof fn?.['arguments'] === 'string' ? fn['arguments'] : ''
+    const rawArgsDelta = typeof fn?.['arguments'] === 'string' ? fn['arguments'] : ''
+    const argsDelta = sanitizeDeepSeekText(rawArgsDelta)
     const fnName = typeof fn?.['name'] === 'string' ? fn['name'] : undefined
     const tcId = typeof tc['id'] === 'string' ? tc['id'] : undefined
 

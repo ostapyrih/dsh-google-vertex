@@ -18,9 +18,11 @@ import {
   DEFAULT_DEEPSEEK_MAX_TOKENS,
   DEFAULT_DEEPSEEK_MODELS,
   deepseekEndpointFor,
+  isSupportedDeepSeekTool,
   mapOpenAIFinishReason,
   mapOpenAIUsage,
   normalizeDeepSeekModel,
+  sanitizeDeepSeekText,
 } from '../src/deepseek.ts'
 import type { GenerateOptions } from '../src/host.ts'
 import type { VertexWireConfig } from '../src/wire.ts'
@@ -332,4 +334,68 @@ test('DeepSeekStreamTranslator reports empty response when model produces no con
   assert.equal(chunks[0]?.type, 'finish')
   const failure = (chunks[0] as { reason: { failure?: { code: string } } }).reason.failure
   assert.equal(failure?.code, EMPTY_RESPONSE_CODE)
+})
+
+test('sanitizeDeepSeekText strips leaked DSML tags and special token delimiters', () => {
+  assert.equal(
+    sanitizeDeepSeekText('  readonly contextWindow: number</｜DSML｜ parameter>, '),
+    '  readonly contextWindow: number, ',
+  )
+  assert.equal(sanitizeDeepSeekText('</｜DSML｜ parameter>'), '')
+  assert.equal(sanitizeDeepSeekText('<｜tool call begin｜>function<｜tool sep｜>edit'), 'functionedit')
+  assert.equal(
+    sanitizeDeepSeekText('<｜DSML｜ parameter name=path>src/index.ts</｜DSML｜ parameter>'),
+    'src/index.ts',
+  )
+  assert.equal(sanitizeDeepSeekText('const x = 1;</parameter>'), 'const x = 1;')
+  assert.equal(sanitizeDeepSeekText('regular text without tags'), 'regular text without tags')
+})
+
+test('DeepSeekStreamTranslator strips leaked DSML tags from tool arguments and content', () => {
+  const translator = new DeepSeekStreamTranslator('deepseek-ai/deepseek-v4.1-flash-maas')
+  const chunks = [
+    ...translator.handle({
+      choices: [{
+        delta: {
+          tool_calls: [{
+            index: 0,
+            id: 'call_edit1',
+            type: 'function',
+            function: {
+              name: 'edit',
+              arguments: '{"new_string": "readonly contextWindow: number</｜DSML｜ parameter>, "}',
+            },
+          }],
+        },
+        finish_reason: null,
+      }],
+    }),
+    ...translator.handle({ choices: [{ delta: {}, finish_reason: 'tool_calls' }] }),
+    ...translator.finish(),
+  ]
+
+  const delta = chunks.find(c => c.type === 'tool-call-delta') as { argumentsDelta: string } | undefined
+  assert.ok(delta)
+  assert.equal(delta.argumentsDelta, '{"new_string": "readonly contextWindow: number, "}')
+
+  const end = chunks.find(c => c.type === 'block-end') as { block: { arguments: string } } | undefined
+  assert.ok(end)
+  assert.equal(end.block.arguments, '{"new_string": "readonly contextWindow: number, "}')
+})
+
+test('buildDeepSeekRequest filters out read_image to prevent hallucination loops', () => {
+  const options: GenerateOptions = {
+    model: 'deepseek-v4.1-flash',
+    messages: [{ role: 'user', content: [{ type: 'text', text: 'Read index.ts' }] }],
+    tools: [
+      { name: 'read', description: 'Read text file', parameters: { type: 'object' } },
+      { name: 'read_image', description: 'Read image file', parameters: { type: 'object' } },
+      { name: 'edit', description: 'Edit file', parameters: { type: 'object' } },
+    ],
+  }
+  const body = buildDeepSeekRequest(options, WIRE)
+  assert.equal(body.tools?.length, 2)
+  assert.deepEqual(body.tools?.map(t => t.function.name), ['read', 'edit'])
+  assert.equal(isSupportedDeepSeekTool({ name: 'read_image', description: '' }), false)
+  assert.equal(isSupportedDeepSeekTool({ name: 'read', description: '' }), true)
 })
