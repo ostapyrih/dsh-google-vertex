@@ -37,7 +37,7 @@ import {
 } from './deepseek.ts'
 import { GoogleVertexDeepSeekAdapter } from './deepseek_adapter.ts'
 import type { DeepSeekAdapterConfig } from './deepseek_adapter.ts'
-import { fetchGeminiModels } from './discovery.ts'
+import { fetchClaudeModels, fetchDeepSeekModels, fetchGeminiModels } from './discovery.ts'
 import { DEFAULT_GEMINI_CONTEXT_WINDOW, DEFAULT_GEMINI_MAX_TOKENS, DEFAULT_GEMINI_MODELS } from './gemini.ts'
 import { GoogleVertexGeminiAdapter } from './gemini_adapter.ts'
 import type { GeminiAdapterConfig } from './gemini_adapter.ts'
@@ -288,21 +288,30 @@ export function apply(ctx: HostContext, config: Config): void {
   const resolved = resolveConfig(row)
   const { anthropic, gemini, deepseek } = resolved
 
-  // Only the Gemini route discovers: Vertex has no Anthropic listing endpoint,
-  // so the Claude catalog is the configured (or built-in) list itself. A
-  // configured `geminiModels` is likewise served as written, never replaced by
-  // the discovered catalog.
+  // Catalogs are discovered from Vertex at runtime unless explicitly pinned
+  // by configuration. An empty or omitted list enables live discovery.
   const fetchFn: (input: string, init: RequestInit) => Promise<Response>
     = (input, init) => globalThis.fetch(input, init)
   const tokenSource = new ServiceAccountTokens(anthropic.serviceAccount, { fetch: fetchFn })
+
+  const pinnedClaude = row.models !== undefined && row.models.length > 0
+  const discoverClaude = pinnedClaude
+    ? undefined
+    : () => fetchClaudeModels(anthropic.location, tokenSource, fetchFn, AbortSignal.timeout(Math.ceil(anthropic.streamIdleTimeoutMs)))
+
   const pinnedGemini = row.geminiModels !== undefined && row.geminiModels.length > 0
   const discoverGemini = pinnedGemini
     ? undefined
     : () => fetchGeminiModels(gemini.location, tokenSource, fetchFn, AbortSignal.timeout(Math.ceil(gemini.streamIdleTimeoutMs)))
 
-  const anthropicAdapter = new GoogleVertexAnthropicAdapter(anthropic)
+  const pinnedDeepSeek = row.deepseekModels !== undefined && row.deepseekModels.length > 0
+  const discoverDeepSeek = pinnedDeepSeek
+    ? undefined
+    : () => fetchDeepSeekModels(tokenSource, fetchFn, AbortSignal.timeout(Math.ceil(deepseek.streamIdleTimeoutMs)))
+
+  const anthropicAdapter = new GoogleVertexAnthropicAdapter(anthropic, discoverClaude === undefined ? {} : { discover: discoverClaude })
   const geminiAdapter = new GoogleVertexGeminiAdapter(gemini, discoverGemini === undefined ? {} : { discover: discoverGemini })
-  const deepseekAdapter = new GoogleVertexDeepSeekAdapter(deepseek)
+  const deepseekAdapter = new GoogleVertexDeepSeekAdapter(deepseek, discoverDeepSeek === undefined ? {} : { discover: discoverDeepSeek })
   ctx.llm.registerAdapter([PROVIDER], anthropicAdapter)
   ctx.llm.registerAdapter([GEMINI_PROVIDER], geminiAdapter)
   ctx.llm.registerAdapter([DEEPSEEK_PROVIDER], deepseekAdapter)
@@ -319,8 +328,8 @@ export function apply(ctx: HostContext, config: Config): void {
   ctx.logger.info(
     `google-vertex: providers "${PROVIDER}", "${GEMINI_PROVIDER}", and "${DEEPSEEK_PROVIDER}" registered for project ${anthropic.project}`
     + ` (location ${anthropic.location}, credentials ${resolved.serviceAccountFile})`
-    + `. Claude: ${anthropic.models.map(model => model.id).join(', ')}`
+    + `. Claude: ${anthropic.models.map(model => model.id).join(', ')}${pinnedClaude ? '' : ' (+ live discovery)'}`
     + `. Gemini: ${gemini.models.map(model => model.id).join(', ')}${pinnedGemini ? '' : ' (+ live discovery)'}`
-    + `. DeepSeek: ${deepseek.models.map(model => model.id).join(', ')}`,
+    + `. DeepSeek: ${deepseek.models.map(model => model.id).join(', ')}${pinnedDeepSeek ? '' : ' (+ live discovery)'}`,
   )
 }

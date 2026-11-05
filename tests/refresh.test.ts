@@ -83,6 +83,11 @@ test('a committed settings write drops the cached catalog, so the next read re-d
       return Promise.resolve(new Response(JSON.stringify({ access_token: 'token', expires_in: 3600 }), { status: 200 }))
     }
     catalogs += 1
+    if (url.includes('publishers/anthropic/models')) {
+      return Promise.resolve(new Response(JSON.stringify({
+        publisherModels: [{ name: 'publishers/anthropic/models/claude-opus-5' }],
+      }), { status: 200 }))
+    }
     return Promise.resolve(new Response(JSON.stringify({
       publisherModels: [{ name: 'publishers/google/models/gemini-9-pro' }],
     }), { status: 200 }))
@@ -105,17 +110,20 @@ test('a committed settings write drops the cached catalog, so the next read re-d
     await gemini.listModels(plugin.GEMINI_PROVIDER)
     assert.equal(catalogs, 1)
 
-    // The Claude route serves its configured catalog: no discovery, no request.
+    // The Claude route also discovers live models from Vertex.
     const claude = await anthropic.listModels(plugin.PROVIDER)
-    assert.ok(claude.length > 0, 'the Claude catalog is served from configuration')
-    assert.equal(catalogs, 1, 'the Claude route made no catalog request')
+    assert.ok(claude.some(model => model.id === 'claude-opus-5'), 'the Claude catalog discovers live models')
+    assert.equal(catalogs, 2, 'the Claude route made a discovery request')
+
+    // While the five-minute cache holds, the route does not reach the provider.
+    await anthropic.listModels(plugin.PROVIDER)
+    assert.equal(catalogs, 2)
 
     // A write of the volatile `revalidatedAt` reaches the plugin as this event.
     ctx.emit('loader/volatile-update', [['revalidatedAt']])
 
     await gemini.listModels(plugin.GEMINI_PROVIDER)
-    assert.equal(catalogs, 2, 'Gemini re-discovered after the refresh')
-    assert.deepEqual(await anthropic.listModels(plugin.PROVIDER), claude, 'the Claude catalog is unchanged')
+    assert.equal(catalogs, 3, 'Gemini re-discovered after the refresh')
 
     // A hung provider catalog must settle on the configured timeout and fall
     // back, rather than leaving every model picker awaiting the same request.
@@ -163,10 +171,16 @@ test('a configured Gemini catalog is served as configured, without discovery', a
   let catalogs = 0
   const realFetch = globalThis.fetch
   globalThis.fetch = ((input: string | URL | Request): Promise<Response> => {
-    if (String(input).includes('oauth2.googleapis.com')) {
+    const url = String(input)
+    if (url.includes('oauth2.googleapis.com')) {
       return Promise.resolve(new Response(JSON.stringify({ access_token: 'token', expires_in: 3600 }), { status: 200 }))
     }
     catalogs += 1
+    if (url.includes('publishers/anthropic/models')) {
+      return Promise.resolve(new Response(JSON.stringify({
+        publisherModels: [{ name: 'publishers/anthropic/models/claude-opus-5' }],
+      }), { status: 200 }))
+    }
     return Promise.resolve(new Response(JSON.stringify({
       publisherModels: [{ name: 'publishers/google/models/gemini-9-pro' }],
     }), { status: 200 }))

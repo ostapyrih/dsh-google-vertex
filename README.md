@@ -12,8 +12,8 @@ Nothing is copied into the harness credential store: the file is read once at mo
   - Claude emits raw JSON argument deltas.
   - Gemini emits complete function calls and replays thought signatures.
   - DeepSeek connects to Vertex Model Garden's OpenAI-compatible completions endpoint, streaming argument deltas and seamlessly mapping DeepSeek-R1 reasoning (`delta.reasoning_content` and streamed `<think>...</think>` tags) to Harness thought blocks.
-- The Gemini catalog discovered from Vertex at runtime behind a five-minute cache, with built-in fallbacks. Claude and DeepSeek catalogs are served from configured (or built-in) lists with alias normalization (`deepseek-v3`, `deepseek-r1`, `deepseek-v4.1-flash`).
-- A **Refresh models** control on this plugin's row page, which drops caches and re-reads the model picker without restarting `dsh web`.
+- Live catalog auto-discovery across all three routes (Gemini, Claude, and DeepSeek) from Vertex AI behind a five-minute cache, with built-in fallbacks. When omitted in config, catalogs are automatically discovered; pinning models (`models`, `geminiModels`, `deepseekModels`) is optional. DeepSeek aliases (`deepseek-v3`, `deepseek-r1`, `deepseek-v4.1-flash`) remain supported.
+- A **Refresh models** control on this plugin's row page, which drops cached catalogs and re-reads the model picker without restarting `dsh web`.
 - Claude prompt-cache breakpoints on tools, system, and the final conversation block, with cache read/write counts reported as usage.
 - Failure codes the harness can act on: `429` → `RATE_LIMIT`, `5xx` → `SERVER`, `RESOURCE_EXHAUSTED` → `QUOTA`, oversized → `CONTEXT_WINDOW_EXCEEDED`, a stalled stream → `TIMEOUT`.
 - Environment fallbacks for the credential, project, and region.
@@ -63,9 +63,9 @@ Override the row configuration by editing `cordis.patch.yml` in your profile dir
 | `serviceAccountFile` | `$GOOGLE_APPLICATION_CREDENTIALS` | Path to the service-account JSON; `~` is expanded. Nothing is copied into the harness credential store: the file is the credential, and it is read once at mount. |
 | `project` | `$GOOGLE_CLOUD_PROJECT`, `$GCLOUD_PROJECT`, then the file's `project_id` | Google Cloud project id, used by all routes. |
 | `location` | `$GOOGLE_CLOUD_LOCATION`, then `global` | Region for endpoints, or `global` for `aiplatform.googleapis.com`. Note: DeepSeek Model Garden endpoints typically run in regions such as `us-central1`. |
-| `models` | the Claude catalog below | Claude ids to advertise, replacing the built-in catalog. Any id is accepted at request time regardless. |
-| `geminiModels` | the Gemini catalog below | Gemini ids to advertise, served as written: a configured list turns live discovery off. Every entry serves the same context/output pair. |
-| `deepseekModels` | the DeepSeek catalog below | DeepSeek ids to advertise, replacing the built-in catalog. Any id is accepted at request time regardless. |
+| `models` | auto-discovered (or built-in fallback) | Claude ids to advertise; pins the catalog and turns live discovery off. If omitted, models are dynamically discovered from Vertex (`publishers/anthropic/models`). |
+| `geminiModels` | auto-discovered (or built-in fallback) | Gemini ids to advertise; pins the catalog and turns live discovery off. If omitted, models are dynamically discovered from Vertex (`publishers/google/models`). |
+| `deepseekModels` | auto-discovered (or built-in fallback) | DeepSeek ids to advertise; pins the catalog and turns live discovery off. If omitted, models are dynamically discovered from Vertex Model Garden (`publishers/* /models`). |
 | `contextWindow` | `200000` | Claude context window reported per model. |
 | `maxTokens` | `32000` | Claude output cap applied when a caller omits one. |
 | `streamIdleTimeoutMs` | `300000` | Bound on the interval between two stream reads, on all routes. |
@@ -119,9 +119,14 @@ Ids are Vertex's aliases, so a promoted release needs no edit here. Both catalog
 
 ### Discovery and refresh
 
-The lists above are the fallback, not the whole catalog. Gemini models are read from Vertex's `publishers/google/models` list (a `v1beta1` method: v1 has no list), keeping `gemini-` ids except the embedding, TTS, image, Live, and audio variants this text route cannot drive. A built-in id keeps its picker label; any other is labelled by its id. The result is cached for five minutes so opening the model picker is not a network call. The Claude list is served exactly as configured, because Vertex exposes no Anthropic model listing endpoint.
+The lists above are the fallback, not the whole catalog. By default, all three routes dynamically discover available models from Vertex AI:
+- **Gemini**: fetched from Vertex's `publishers/google/models` catalog (filtering out embedding, TTS, image, Live, and audio variants).
+- **Claude**: fetched directly from `publishers/anthropic/models`, automatically picking up newer families (such as Claude Opus 5, Sonnet 5.5, Fable, etc.) as Google publishes them.
+- **DeepSeek**: fetched from Vertex Model Garden's catalog (`publishers/* /models` with `is_hf_wildcard(false)` filter in `us-central1`), automatically discovering servable MaaS models.
 
-The picker re-reads that catalog when the host says a model input changed, so a model Google published a minute ago stays invisible until then. This plugin's row page carries the control that forces it: open **Plugins** in the sidebar, open the `dsh-google-vertex` bundle, and configure the `google-vertex` row. **Refresh models** drops the cached Gemini catalog and makes the picker re-read it from this process. The card records the last manual refresh in its own `google-vertex` settings namespace, and the write is also the signal: a browser half has no other channel to the host.
+Discovered models are cached for five minutes so opening the model picker is fast and doesn't spam the network. If any discovery call fails, the adapter seamlessly falls back to the static defaults.
+
+The picker re-reads the catalogs when the host says a model input changed. This plugin's row page also carries the control that forces an immediate re-read: open **Plugins** in the sidebar, open the `dsh-google-vertex` bundle, and configure the `google-vertex` row. **Refresh models** drops all cached catalogs and re-fetches them from Vertex AI.
 
 ## Try it
 
