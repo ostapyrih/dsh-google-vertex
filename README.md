@@ -22,28 +22,20 @@ Nothing is copied into the harness credential store: the file is read once at mo
 
 Requires DeepSeek Harness `>=0.2.0 <0.3.0`.
 
-You can install the plugin either directly from your local checkout or from the GitHub fork into your active DSH profile (`desktop` for the desktop application, or `web` for `dsh web`):
-
-### Option A: Install from local checkout (Recommended for development)
-
-Point DSH at your local repository directory:
+Install the plugin from the GitHub repository into your active DSH profile (`desktop` for the desktop application, or `web` for `dsh web`):
 
 ```sh
-# For the desktop application profile:
-dsh plugin --profile desktop add C:\Users\ostap\Projects\dsh-google-vertex
-
-# Or for the web profile:
-dsh plugin --profile web add C:\Users\ostap\Projects\dsh-google-vertex
-```
-
-### Option B: Install from GitHub fork
-
-```sh
-# For the desktop application profile:
+# For the desktop application:
 dsh plugin --profile desktop add github:ostapyrih/dsh-google-vertex
 
 # Or for the web profile:
 dsh plugin --profile web add github:ostapyrih/dsh-google-vertex
+```
+
+Alternatively, if you are developing locally from a cloned checkout:
+
+```sh
+dsh plugin --profile desktop add /path/to/dsh-google-vertex
 ```
 
 The package declares `dsh.bundle`, so `dsh plugin add` automatically adds it to `dsh.profile.bundles` and the bundle's `cordis.patch.yml` registers the `google-vertex` row. Restart DeepSeek Harness after installation.
