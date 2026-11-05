@@ -35,6 +35,7 @@ export declare class GoogleVertexDeepSeekAdapter extends VertexPublisherAdapter<
     });
     /**
      * Resolve model metadata, normalizing aliases like `deepseek-v3`, `deepseek-r1`, and `deepseek-v4.1-flash`.
+     * Preserves `id: model` to satisfy DeepSeek Harness's runtime exactModelMetadata contract.
      */
     resolveModel(provider: string, model: string, signal?: AbortSignal): Promise<LlmResolvedModelInfo>;
     /**

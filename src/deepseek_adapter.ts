@@ -64,6 +64,7 @@ export class GoogleVertexDeepSeekAdapter extends VertexPublisherAdapter<DeepSeek
 
   /**
    * Resolve model metadata, normalizing aliases like `deepseek-v3`, `deepseek-r1`, and `deepseek-v4.1-flash`.
+   * Preserves `id: model` to satisfy DeepSeek Harness's runtime exactModelMetadata contract.
    */
   override async resolveModel(provider: string, model: string, signal?: AbortSignal): Promise<LlmResolvedModelInfo> {
     const canonical = normalizeDeepSeekModel(model)
@@ -71,6 +72,7 @@ export class GoogleVertexDeepSeekAdapter extends VertexPublisherAdapter<DeepSeek
     const isFlash = canonical.toLowerCase().includes('flash')
     return {
       ...resolved,
+      id: model,
       context: { contextWindow: isFlash ? 1_000_000 : (this.config.contextWindow || DEFAULT_DEEPSEEK_CONTEXT_WINDOW) },
     }
   }
@@ -80,7 +82,7 @@ export class GoogleVertexDeepSeekAdapter extends VertexPublisherAdapter<DeepSeek
    */
   override async prepareCall(provider: string, model: string, signal?: AbortSignal): Promise<PreparedAdapterCall> {
     const canonical = normalizeDeepSeekModel(model)
-    const resolved = await this.resolveModel(provider, canonical, signal)
+    const resolved = await this.resolveModel(provider, model, signal)
     return {
       model: resolved,
       stream: (options: GenerateOptions) => this.stream({

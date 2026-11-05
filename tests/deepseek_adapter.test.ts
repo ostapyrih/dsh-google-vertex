@@ -41,29 +41,34 @@ test('model metadata normalizes aliases and reports capacities', async () => {
   const adapter = new GoogleVertexDeepSeekAdapter(CONFIG, { tokens: tokens() })
 
   const v3 = await adapter.resolveModel('google-vertex-deepseek', 'deepseek-v3')
-  assert.equal(v3.id, 'deepseek-ai/DeepSeek-V3')
+  assert.equal(v3.id, 'deepseek-v3')
   assert.equal(v3.name, 'DeepSeek-V3 (Vertex Model Garden)')
   assert.equal(v3.context?.contextWindow, 128_000)
   assert.equal(v3.defaultMaxTokens, 16_384)
 
   const r1 = await adapter.resolveModel('google-vertex-deepseek', 'deepseek-r1')
-  assert.equal(r1.id, 'deepseek-ai/DeepSeek-R1')
+  assert.equal(r1.id, 'deepseek-r1')
   assert.equal(r1.name, 'DeepSeek-R1 (Vertex Model Garden)')
   assert.equal(r1.context?.contextWindow, 128_000)
   assert.equal(r1.defaultMaxTokens, 16_384)
 
   const flash = await adapter.resolveModel('google-vertex-deepseek', 'deepseek-v4.1-flash')
-  assert.equal(flash.id, 'deepseek-ai/deepseek-v4.1-flash-maas')
+  assert.equal(flash.id, 'deepseek-v4.1-flash')
   assert.equal(flash.name, 'DeepSeek-V4.1-Flash (Vertex Model Garden)')
   assert.equal(flash.context?.contextWindow, 1_000_000)
   assert.equal(flash.defaultMaxTokens, 16_384)
+
+  // Also verify canonical IDs resolve identically and preserve ID
+  const canonicalR1 = await adapter.resolveModel('google-vertex-deepseek', 'deepseek-ai/DeepSeek-R1')
+  assert.equal(canonicalR1.id, 'deepseek-ai/DeepSeek-R1')
+  assert.equal(canonicalR1.name, 'DeepSeek-R1 (Vertex Model Garden)')
 })
 
 test('prepareCall binds canonical model and stream function', async () => {
   const adapter = new GoogleVertexDeepSeekAdapter(CONFIG, { tokens: tokens() })
   const prep = await adapter.prepareCall('google-vertex-deepseek', 'deepseek-v3')
 
-  assert.equal(prep.model.id, 'deepseek-ai/DeepSeek-V3')
+  assert.equal(prep.model.id, 'deepseek-v3')
   assert.equal(typeof prep.stream, 'function')
 })
 
