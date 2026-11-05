@@ -198,23 +198,28 @@ function formatMessages(options: GenerateOptions): OpenAIMessage[] {
  * Strip DeepSeek-specific markup language (DSML) tags and special tokens that
  * can leak into tool arguments or content from Vertex Model Garden's backend parser.
  *
- * Examples of leaked artifacts:
+ * Handles both complete and unclosed/truncated tags, such as:
  * - `</｜DSML｜ parameter>` or `<｜DSML｜ parameter ...>`
+ * - `<｜DSML｜ parameter name=` (unclosed tag leaked into content/arguments)
  * - `<｜tool call begin｜>`, `<｜tool call end｜>`, `<｜tool sep｜>`
  * - `<｜...｜>` and `<|...|>`
- * - `</parameter>` or `</DSML>`
+ * - `</parameter>` or `<parameter name="...">`
  * @param text - string that may contain leaked DSML tokens.
  * @returns cleaned string.
  */
 export function sanitizeDeepSeekText(text: string): string {
   if (text.length === 0) return text
   return text
-    // Strip DSML parameter tags (with fullwidth or standard pipe, self-closing or not)
+    // Strip DSML parameter tags (complete, unclosed without '>', or self-closing)
+    .replace(/<[/／]?[｜|]?\s*DSML\b[^>\r\n]*>?/gi, '')
     .replace(/<[/／]?[｜|]?\s*DSML\s*[｜|]?[^>]*>/gi, '')
-    // Strip standalone </parameter> tags
-    .replace(/<[/／]parameter\s*>/gi, '')
-    // Strip DeepSeek special token delimiters <｜...｜>
-    .replace(/<[｜|][^｜|>]+[｜|]>/g, '')
+    // Strip standalone parameter tags (complete or unclosed)
+    .replace(/<[/／]?parameter\b[^>\r\n]*>?/gi, '')
+    // Strip DeepSeek special token delimiters <｜...｜> or unclosed special tokens
+    .replace(/<[｜|][^>\r\n]+[｜|]>?/g, '')
+    .replace(/<[｜|]\s*(?:tool|thought|begin|end|User|Assistant)[^>\r\n]*>?/gi, '')
+    // Strip any trailing partial DeepSeek token at the end of the string
+    .replace(/<[｜|][^>\r\n]*$/g, '')
 }
 
 /**

@@ -349,6 +349,13 @@ test('sanitizeDeepSeekText strips leaked DSML tags and special token delimiters'
   )
   assert.equal(sanitizeDeepSeekText('const x = 1;</parameter>'), 'const x = 1;')
   assert.equal(sanitizeDeepSeekText('regular text without tags'), 'regular text without tags')
+  // Unclosed DSML parameter tags (e.g. leaked into write tool args)
+  assert.equal(
+    sanitizeDeepSeekText('print(f"  hexruns: {runs2}")<｜DSML｜ parameter name=\n        print(f"  hexruns: {runs2}")'),
+    'print(f"  hexruns: {runs2}")\n        print(f"  hexruns: {runs2}")',
+  )
+  assert.equal(sanitizeDeepSeekText('trailing <｜DSML｜ parameter'), 'trailing ')
+  assert.equal(sanitizeDeepSeekText('unclosed <｜DSML'), 'unclosed ')
 })
 
 test('DeepSeekStreamTranslator strips leaked DSML tags from tool arguments and content', () => {

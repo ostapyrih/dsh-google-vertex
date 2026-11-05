@@ -94,11 +94,12 @@ export interface DeepSeekRequestBody {
  * Strip DeepSeek-specific markup language (DSML) tags and special tokens that
  * can leak into tool arguments or content from Vertex Model Garden's backend parser.
  *
- * Examples of leaked artifacts:
+ * Handles both complete and unclosed/truncated tags, such as:
  * - `</｜DSML｜ parameter>` or `<｜DSML｜ parameter ...>`
+ * - `<｜DSML｜ parameter name=` (unclosed tag leaked into content/arguments)
  * - `<｜tool call begin｜>`, `<｜tool call end｜>`, `<｜tool sep｜>`
  * - `<｜...｜>` and `<|...|>`
- * - `</parameter>` or `</DSML>`
+ * - `</parameter>` or `<parameter name="...">`
  * @param text - string that may contain leaked DSML tokens.
  * @returns cleaned string.
  */
