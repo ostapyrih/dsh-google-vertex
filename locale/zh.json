@@ -2,5 +2,43 @@
   "meta": {
     "title": "Google Vertex",
     "description": "用服务账号调用 Vertex AI 上的 Claude、Gemini 与 DeepSeek。"
+  },
+  "config": {
+    "serviceAccountFile": {
+      "label": "服务账号文件",
+      "description": "Google Cloud 服务账号 JSON 文件路径。支持波浪号 (~) 展开。默认使用 GOOGLE_APPLICATION_CREDENTIALS 环境变量。"
+    },
+    "project": {
+      "label": "Google Cloud 项目",
+      "description": "Google Cloud 项目 ID。默认使用 GOOGLE_CLOUD_PROJECT，然后是 GCLOUD_PROJECT，最后是服务账号中的 project_id。"
+    },
+    "location": {
+      "label": "Vertex AI 区域",
+      "description": "Vertex AI 端点的 Google Cloud 区域（如 us-central1、europe-west1）。使用 'global' 表示 aiplatform.googleapis.com。默认使用 GOOGLE_CLOUD_LOCATION 或 'global'。"
+    },
+    "models": {
+      "label": "Claude 模型",
+      "description": "要公开的 Claude 模型 ID 列表。留空以启用从 Vertex AI 实时发现可用模型。"
+    },
+    "geminiModels": {
+      "label": "Gemini 模型",
+      "description": "要公开的 Gemini 模型 ID 列表。留空以启用从 Vertex AI 实时发现可用模型。"
+    },
+    "deepseekModels": {
+      "label": "DeepSeek 模型",
+      "description": "要从 Vertex Model Garden 公开的 DeepSeek 模型 ID 列表。留空以启用实时发现。"
+    },
+    "contextWindow": {
+      "label": "Claude 上下文窗口",
+      "description": "报告给 Claude 模型的上下文窗口大小（以 token 为单位）。默认值：200000。"
+    },
+    "maxTokens": {
+      "label": "Claude 最大输出 Token",
+      "description": "调用者未指定时 Claude 模型的最大输出 token 数。默认值：32000。"
+    },
+    "streamIdleTimeoutMs": {
+      "label": "流空闲超时",
+      "description": "等待流式传输块之间的最长时间（毫秒），超时后将中断。默认值：300000（5 分钟）。"
+    }
   }
 }

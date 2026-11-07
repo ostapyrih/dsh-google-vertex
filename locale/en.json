@@ -2,5 +2,43 @@
   "meta": {
     "title": "Google Vertex",
     "description": "Service-account access to Claude, Gemini, and DeepSeek on Vertex AI."
+  },
+  "config": {
+    "serviceAccountFile": {
+      "label": "Service Account File",
+      "description": "Path to the Google Cloud service account JSON file. Supports tilde (~) expansion. Defaults to GOOGLE_APPLICATION_CREDENTIALS environment variable."
+    },
+    "project": {
+      "label": "Google Cloud Project",
+      "description": "Google Cloud project ID. Defaults to GOOGLE_CLOUD_PROJECT, then GCLOUD_PROJECT, then the service account's project_id."
+    },
+    "location": {
+      "label": "Vertex AI Location",
+      "description": "Google Cloud region for Vertex AI endpoints (e.g., us-central1, europe-west1). Use 'global' for aiplatform.googleapis.com. Defaults to GOOGLE_CLOUD_LOCATION or 'global'."
+    },
+    "models": {
+      "label": "Claude Models",
+      "description": "List of Claude model IDs to advertise. Leave empty to enable live discovery of available models from Vertex AI."
+    },
+    "geminiModels": {
+      "label": "Gemini Models",
+      "description": "List of Gemini model IDs to advertise. Leave empty to enable live discovery of available models from Vertex AI."
+    },
+    "deepseekModels": {
+      "label": "DeepSeek Models",
+      "description": "List of DeepSeek model IDs to advertise from Vertex Model Garden. Leave empty to enable live discovery."
+    },
+    "contextWindow": {
+      "label": "Claude Context Window",
+      "description": "Context window size reported for Claude models (in tokens). Default: 200000."
+    },
+    "maxTokens": {
+      "label": "Claude Max Output Tokens",
+      "description": "Maximum output tokens for Claude models when not specified by caller. Default: 32000."
+    },
+    "streamIdleTimeoutMs": {
+      "label": "Stream Idle Timeout",
+      "description": "Maximum time (ms) to wait between stream chunks before timing out. Default: 300000 (5 minutes)."
+    }
   }
 }
