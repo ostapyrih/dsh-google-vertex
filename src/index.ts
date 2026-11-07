@@ -1,4 +1,4 @@
-/**
+/*
  * dsh-google-vertex: use Google-hosted models from Vertex AI inside DeepSeek
  * Harness, authenticated with a service-account file.
  *
@@ -190,11 +190,11 @@ export function resolveConfig(config: Options = {}, env: NodeJS.ProcessEnv = pro
   // The credential path, the project, and the region keep their environment
   // fallbacks, so they are read off the raw row instead.
   const filled = Config(config)
-  
+
   // Unwrap volatile references to get actual values
   // Volatile.get() returns VolatileSnapshot<T> which for primitives is T
   const getValue = <T>(v: Volatile<T> | undefined): T | undefined => v?.get() as unknown as T | undefined
-  
+
   const serviceAccountFile = getValue(filled.serviceAccountFile) ?? env['GOOGLE_APPLICATION_CREDENTIALS']
   if (serviceAccountFile === undefined || serviceAccountFile.trim().length === 0) {
     throw new Error(
@@ -292,10 +292,10 @@ export function resolveConfig(config: Options = {}, env: NodeJS.ProcessEnv = pro
 export function apply(ctx: HostContext, config: Config): void {
   // Track adapter disposables for cleanup on config change
   let disposables: (() => void)[] = []
-  
+
   // Helper to unwrap volatile refs
   const getValue = <T>(v: Volatile<T> | undefined): T | undefined => v?.get() as unknown as T | undefined
-  
+
   // Function to register adapters with current config
   const registerAdapters = () => {
     // Clean up previous adapters
@@ -303,11 +303,11 @@ export function apply(ctx: HostContext, config: Config): void {
       dispose()
     }
     disposables = []
-    
+
     // The volatile stamp stays a live reference: the schema refuses one, and the
     // host never reads the value, so the plain row is what gets resolved.
     const { revalidatedAt: _revalidation, ...row } = config
-    
+
     // Create unwrapped config for resolveConfig (which expects plain values)
     const unwrappedConfig: Options = {
       serviceAccountFile: getValue(row.serviceAccountFile),
@@ -320,7 +320,7 @@ export function apply(ctx: HostContext, config: Config): void {
       maxTokens: getValue(row.maxTokens),
       streamIdleTimeoutMs: getValue(row.streamIdleTimeoutMs),
     }
-    
+
     const resolved = resolveConfig(unwrappedConfig)
     const { anthropic, gemini, deepseek } = resolved
 
@@ -352,20 +352,10 @@ export function apply(ctx: HostContext, config: Config): void {
     const anthropicAdapter = new GoogleVertexAnthropicAdapter(anthropic, discoverClaude === undefined ? {} : { discover: discoverClaude })
     const geminiAdapter = new GoogleVertexGeminiAdapter(gemini, discoverGemini === undefined ? {} : { discover: discoverGemini })
     const deepseekAdapter = new GoogleVertexDeepSeekAdapter(deepseek, discoverDeepSeek === undefined ? {} : { discover: discoverDeepSeek })
-    
+
     disposables.push(ctx.llm.registerAdapter([PROVIDER], anthropicAdapter))
     disposables.push(ctx.llm.registerAdapter([GEMINI_PROVIDER], geminiAdapter))
     disposables.push(ctx.llm.registerAdapter([DEEPSEEK_PROVIDER], deepseekAdapter))
-
-    // A profile edit of any volatile field triggers re-registration via loader/volatile-update
-    if (typeof ctx.on === 'function') {
-      ctx.on('loader/volatile-update', () => {
-        anthropicAdapter.invalidateModels()
-        geminiAdapter.invalidateModels()
-        deepseekAdapter.invalidateModels()
-        registerAdapters()
-      })
-    }
 
     ctx.logger.info(
       `google-vertex: providers "${PROVIDER}", "${GEMINI_PROVIDER}", and "${DEEPSEEK_PROVIDER}" registered for project ${anthropic.project}`
@@ -375,7 +365,12 @@ export function apply(ctx: HostContext, config: Config): void {
       + `. DeepSeek: ${deepseek.models.map(model => model.id).join(', ')}${pinnedDeepSeek ? '' : ' (+ live discovery)'}`,
     )
   }
-  
+
+  // Install exactly one listener; re-registration must not add more listeners.
+  if (typeof ctx.on === 'function') {
+    ctx.on('loader/volatile-update', () => registerAdapters())
+  }
+
   // Initial registration
   registerAdapters()
 }
