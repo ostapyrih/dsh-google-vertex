@@ -104,34 +104,34 @@ export const DEFAULT_MAX_TOKENS = 32_000
  */
 export interface Config {
   /** Service-account JSON path, `~` allowed; defaults to `GOOGLE_APPLICATION_CREDENTIALS`. */
-  readonly serviceAccountFile?: string
+  readonly serviceAccountFile: Volatile<string | undefined>
   /**
    * Project id; defaults to `GOOGLE_CLOUD_PROJECT`, then `GCLOUD_PROJECT`, then
    * the credentials file's own `project_id`.
    */
-  readonly project?: string
+  readonly project: Volatile<string | undefined>
   /** Region, or `global` (the default); defaults to `GOOGLE_CLOUD_LOCATION`. */
-  readonly location: string
+  readonly location: Volatile<string>
   /** Claude model ids to advertise, replacing the built-in catalog. */
-  readonly models: string[]
+  readonly models: Volatile<string[]>
   /** Gemini model ids to advertise, replacing the built-in catalog. */
-  readonly geminiModels: string[]
+  readonly geminiModels: Volatile<string[]>
   /** DeepSeek model ids to advertise, replacing the built-in catalog. */
-  readonly deepseekModels: string[]
+  readonly deepseekModels: Volatile<string[]>
   /**
    * Claude context window reported for every model; defaults to 200000. The
    * Gemini route reports {@link DEFAULT_GEMINI_CONTEXT_WINDOW} for every model
    * it serves, which is why this key has no Gemini counterpart.
    */
-  readonly contextWindow: number
+  readonly contextWindow: Volatile<number>
   /** Claude output cap applied when a caller omits one; defaults to 32000. */
-  readonly maxTokens: number
+  readonly maxTokens: Volatile<number>
   /**
    * Bound on the interval between two stream reads on either route; defaults to
    * 300000. A provider that stops sending is reported as `TIMEOUT` instead of
    * holding the turn open forever.
    */
-  readonly streamIdleTimeoutMs: number
+  readonly streamIdleTimeoutMs: Volatile<number>
   /**
    * Stamp written by the Refresh control; absent until the first manual refresh.
    * Volatile in the schema, so the settings document (which accepts only
@@ -148,24 +148,22 @@ export type Options = { [K in keyof Config]?: Config[K] extends Volatile<infer T
 /**
  * Row schema: defaults live here, so a deployment only states what it changes.
  *
- * `serviceAccountFile`, `project`, `models`, and `geminiModels` carry no
- * `.default()`: the first two fall back to the environment, and an omitted
+ * All fields are volatile so they can be edited in the GUI settings panel.
+ * `serviceAccountFile`, `project`, `models`, `geminiModels`, and `deepseekModels`
+ * carry no `.default()`: the first two fall back to the environment, and an omitted
  * catalog materializes empty, which `resolveConfig` treats exactly like an
  * absent one and replaces with the built-in list.
- *
- * `revalidatedAt` is volatile (the only kind of field the settings document
- * accepts) and carries no default: absence means "never refreshed manually".
  */
 export const Config = Schema.object({
-  serviceAccountFile: Schema.string(),
-  project: Schema.string(),
-  location: Schema.string().default(DEFAULT_LOCATION),
-  models: Schema.array(Schema.string()),
-  geminiModels: Schema.array(Schema.string()),
-  deepseekModels: Schema.array(Schema.string()),
-  contextWindow: Schema.number().step(1).min(1).default(DEFAULT_CONTEXT_WINDOW),
-  maxTokens: Schema.number().step(1).min(1).default(DEFAULT_MAX_TOKENS),
-  streamIdleTimeoutMs: Schema.number().min(Number.MIN_VALUE).max(MAX_TIMER_DELAY_MS).default(DEFAULT_STREAM_IDLE_TIMEOUT_MS),
+  serviceAccountFile: Schema.string().volatile(),
+  project: Schema.string().volatile(),
+  location: Schema.string().default(DEFAULT_LOCATION).volatile(),
+  models: Schema.array(Schema.string()).volatile(),
+  geminiModels: Schema.array(Schema.string()).volatile(),
+  deepseekModels: Schema.array(Schema.string()).volatile(),
+  contextWindow: Schema.number().step(1).min(1).default(DEFAULT_CONTEXT_WINDOW).volatile(),
+  maxTokens: Schema.number().step(1).min(1).default(DEFAULT_MAX_TOKENS).volatile(),
+  streamIdleTimeoutMs: Schema.number().min(Number.MIN_VALUE).max(MAX_TIMER_DELAY_MS).default(DEFAULT_STREAM_IDLE_TIMEOUT_MS).volatile(),
   revalidatedAt: Schema.string().volatile(),
 })
 
@@ -192,7 +190,12 @@ export function resolveConfig(config: Options = {}, env: NodeJS.ProcessEnv = pro
   // The credential path, the project, and the region keep their environment
   // fallbacks, so they are read off the raw row instead.
   const filled = Config(config)
-  const serviceAccountFile = filled.serviceAccountFile ?? env['GOOGLE_APPLICATION_CREDENTIALS']
+  
+  // Unwrap volatile references to get actual values
+  // Volatile.get() returns VolatileSnapshot<T> which for primitives is T
+  const getValue = <T>(v: Volatile<T> | undefined): T | undefined => v?.get() as unknown as T | undefined
+  
+  const serviceAccountFile = getValue(filled.serviceAccountFile) ?? env['GOOGLE_APPLICATION_CREDENTIALS']
   if (serviceAccountFile === undefined || serviceAccountFile.trim().length === 0) {
     throw new Error(
       'google-vertex: no service account configured: set serviceAccountFile in this plugin\'s row,'
@@ -201,7 +204,7 @@ export function resolveConfig(config: Options = {}, env: NodeJS.ProcessEnv = pro
   }
   const serviceAccount = loadServiceAccount(serviceAccountFile)
 
-  const project = filled.project
+  const project = getValue(filled.project)
     ?? env['GOOGLE_CLOUD_PROJECT']
     ?? env['GCLOUD_PROJECT']
     ?? serviceAccount.project_id
@@ -212,21 +215,23 @@ export function resolveConfig(config: Options = {}, env: NodeJS.ProcessEnv = pro
     )
   }
 
-  const location = config.location ?? env['GOOGLE_CLOUD_LOCATION'] ?? DEFAULT_LOCATION
+  const location = getValue(filled.location) ?? env['GOOGLE_CLOUD_LOCATION'] ?? DEFAULT_LOCATION
   if (location.trim().length === 0 || !/^[a-z0-9-]+$/.test(location)) {
     throw new Error(`google-vertex: location "${location}" is not a valid Vertex region`)
   }
 
-  const ids: readonly VertexModel[] = filled.models === undefined || filled.models.length === 0
+  const modelsArray = getValue(filled.models)
+  const ids: readonly VertexModel[] = modelsArray === undefined || modelsArray.length === 0
     ? DEFAULT_MODELS
-    : filled.models.map(id => ({ id, name: id }))
+    : modelsArray.map(id => ({ id, name: id }))
   for (const model of ids) {
     if (model.id.trim().length === 0) throw new Error('google-vertex: model ids must be non-empty strings')
   }
 
-  const geminiIds: readonly string[] = filled.geminiModels === undefined || filled.geminiModels.length === 0
+  const geminiModelsArray = getValue(filled.geminiModels)
+  const geminiIds: readonly string[] = geminiModelsArray === undefined || geminiModelsArray.length === 0
     ? DEFAULT_GEMINI_MODELS.map(model => model.id)
-    : filled.geminiModels
+    : geminiModelsArray
   const geminiModels: readonly VertexModel[] = geminiIds.map((id) => {
     if (id.trim().length === 0) throw new Error('google-vertex: geminiModels ids must be non-empty strings')
     // A configured id keeps the built-in entry's wording when it is one of them;
@@ -234,16 +239,19 @@ export function resolveConfig(config: Options = {}, env: NodeJS.ProcessEnv = pro
     return DEFAULT_GEMINI_MODELS.find(model => model.id === id) ?? { id, name: id }
   })
 
-  const deepseekIds: readonly string[] = filled.deepseekModels === undefined || filled.deepseekModels.length === 0
+  const deepseekModelsArray = getValue(filled.deepseekModels)
+  const deepseekIds: readonly string[] = deepseekModelsArray === undefined || deepseekModelsArray.length === 0
     ? DEFAULT_DEEPSEEK_MODELS.map(model => model.id)
-    : filled.deepseekModels
+    : deepseekModelsArray
   const deepseekModels: readonly VertexModel[] = deepseekIds.map((rawId) => {
     if (rawId.trim().length === 0) throw new Error('google-vertex: deepseekModels ids must be non-empty strings')
     const id = normalizeDeepSeekModel(rawId)
     return DEFAULT_DEEPSEEK_MODELS.find(model => model.id === id) ?? { id, name: id }
   })
 
-  const streamIdleTimeoutMs = filled.streamIdleTimeoutMs
+  const contextWindow = getValue(filled.contextWindow) ?? DEFAULT_CONTEXT_WINDOW
+  const maxTokens = getValue(filled.maxTokens) ?? DEFAULT_MAX_TOKENS
+  const streamIdleTimeoutMs = getValue(filled.streamIdleTimeoutMs) ?? DEFAULT_STREAM_IDLE_TIMEOUT_MS
 
   return {
     serviceAccountFile,
@@ -252,8 +260,8 @@ export function resolveConfig(config: Options = {}, env: NodeJS.ProcessEnv = pro
       project,
       location,
       models: ids,
-      contextWindow: filled.contextWindow,
-      maxTokens: filled.maxTokens,
+      contextWindow,
+      maxTokens,
       streamIdleTimeoutMs,
     },
     gemini: {
@@ -282,54 +290,92 @@ export function resolveConfig(config: Options = {}, env: NodeJS.ProcessEnv = pro
  * @param config - this plugin's row, as the schema emits it.
  */
 export function apply(ctx: HostContext, config: Config): void {
-  // The volatile stamp stays a live reference: the schema refuses one, and the
-  // host never reads the value, so the plain row is what gets resolved.
-  const { revalidatedAt: _revalidation, ...row } = config
-  const resolved = resolveConfig(row)
-  const { anthropic, gemini, deepseek } = resolved
+  // Track adapter disposables for cleanup on config change
+  let disposables: (() => void)[] = []
+  
+  // Helper to unwrap volatile refs
+  const getValue = <T>(v: Volatile<T> | undefined): T | undefined => v?.get() as unknown as T | undefined
+  
+  // Function to register adapters with current config
+  const registerAdapters = () => {
+    // Clean up previous adapters
+    for (const dispose of disposables) {
+      dispose()
+    }
+    disposables = []
+    
+    // The volatile stamp stays a live reference: the schema refuses one, and the
+    // host never reads the value, so the plain row is what gets resolved.
+    const { revalidatedAt: _revalidation, ...row } = config
+    
+    // Create unwrapped config for resolveConfig (which expects plain values)
+    const unwrappedConfig: Options = {
+      serviceAccountFile: getValue(row.serviceAccountFile),
+      project: getValue(row.project),
+      location: getValue(row.location),
+      models: getValue(row.models),
+      geminiModels: getValue(row.geminiModels),
+      deepseekModels: getValue(row.deepseekModels),
+      contextWindow: getValue(row.contextWindow),
+      maxTokens: getValue(row.maxTokens),
+      streamIdleTimeoutMs: getValue(row.streamIdleTimeoutMs),
+    }
+    
+    const resolved = resolveConfig(unwrappedConfig)
+    const { anthropic, gemini, deepseek } = resolved
 
-  // Catalogs are discovered from Vertex at runtime unless explicitly pinned
-  // by configuration. An empty or omitted list enables live discovery.
-  const fetchFn: (input: string, init: RequestInit) => Promise<Response>
-    = (input, init) => globalThis.fetch(input, init)
-  const tokenSource = new ServiceAccountTokens(anthropic.serviceAccount, { fetch: fetchFn })
+    // Catalogs are discovered from Vertex at runtime unless explicitly pinned
+    // by configuration. An empty or omitted list enables live discovery.
+    const fetchFn: (input: string, init: RequestInit) => Promise<Response>
+      = (input, init) => globalThis.fetch(input, init)
+    const tokenSource = new ServiceAccountTokens(anthropic.serviceAccount, { fetch: fetchFn })
 
-  const pinnedClaude = row.models !== undefined && row.models.length > 0
-  const discoverClaude = pinnedClaude
-    ? undefined
-    : () => fetchClaudeModels(anthropic.location, tokenSource, fetchFn, AbortSignal.timeout(Math.ceil(anthropic.streamIdleTimeoutMs)))
+    // Check pinned status using unwrapped values
+    const modelsArray = getValue(row.models)
+    const pinnedClaude = modelsArray !== undefined && modelsArray.length > 0
+    const discoverClaude = pinnedClaude
+      ? undefined
+      : () => fetchClaudeModels(anthropic.location, tokenSource, fetchFn, AbortSignal.timeout(Math.ceil(anthropic.streamIdleTimeoutMs)))
 
-  const pinnedGemini = row.geminiModels !== undefined && row.geminiModels.length > 0
-  const discoverGemini = pinnedGemini
-    ? undefined
-    : () => fetchGeminiModels(gemini.location, tokenSource, fetchFn, AbortSignal.timeout(Math.ceil(gemini.streamIdleTimeoutMs)))
+    const geminiModelsArray = getValue(row.geminiModels)
+    const pinnedGemini = geminiModelsArray !== undefined && geminiModelsArray.length > 0
+    const discoverGemini = pinnedGemini
+      ? undefined
+      : () => fetchGeminiModels(gemini.location, tokenSource, fetchFn, AbortSignal.timeout(Math.ceil(gemini.streamIdleTimeoutMs)))
 
-  const pinnedDeepSeek = row.deepseekModels !== undefined && row.deepseekModels.length > 0
-  const discoverDeepSeek = pinnedDeepSeek
-    ? undefined
-    : () => fetchDeepSeekModels(tokenSource, fetchFn, AbortSignal.timeout(Math.ceil(deepseek.streamIdleTimeoutMs)))
+    const deepseekModelsArray = getValue(row.deepseekModels)
+    const pinnedDeepSeek = deepseekModelsArray !== undefined && deepseekModelsArray.length > 0
+    const discoverDeepSeek = pinnedDeepSeek
+      ? undefined
+      : () => fetchDeepSeekModels(tokenSource, fetchFn, AbortSignal.timeout(Math.ceil(deepseek.streamIdleTimeoutMs)))
 
-  const anthropicAdapter = new GoogleVertexAnthropicAdapter(anthropic, discoverClaude === undefined ? {} : { discover: discoverClaude })
-  const geminiAdapter = new GoogleVertexGeminiAdapter(gemini, discoverGemini === undefined ? {} : { discover: discoverGemini })
-  const deepseekAdapter = new GoogleVertexDeepSeekAdapter(deepseek, discoverDeepSeek === undefined ? {} : { discover: discoverDeepSeek })
-  ctx.llm.registerAdapter([PROVIDER], anthropicAdapter)
-  ctx.llm.registerAdapter([GEMINI_PROVIDER], geminiAdapter)
-  ctx.llm.registerAdapter([DEEPSEEK_PROVIDER], deepseekAdapter)
+    const anthropicAdapter = new GoogleVertexAnthropicAdapter(anthropic, discoverClaude === undefined ? {} : { discover: discoverClaude })
+    const geminiAdapter = new GoogleVertexGeminiAdapter(gemini, discoverGemini === undefined ? {} : { discover: discoverGemini })
+    const deepseekAdapter = new GoogleVertexDeepSeekAdapter(deepseek, discoverDeepSeek === undefined ? {} : { discover: discoverDeepSeek })
+    
+    disposables.push(ctx.llm.registerAdapter([PROVIDER], anthropicAdapter))
+    disposables.push(ctx.llm.registerAdapter([GEMINI_PROVIDER], geminiAdapter))
+    disposables.push(ctx.llm.registerAdapter([DEEPSEEK_PROVIDER], deepseekAdapter))
 
-  // A profile edit of `revalidatedAt` drops all cached catalogs.
-  if (typeof ctx.on === 'function') {
-    ctx.on('loader/volatile-update', () => {
-      anthropicAdapter.invalidateModels()
-      geminiAdapter.invalidateModels()
-      deepseekAdapter.invalidateModels()
-    })
+    // A profile edit of any volatile field triggers re-registration via loader/volatile-update
+    if (typeof ctx.on === 'function') {
+      ctx.on('loader/volatile-update', () => {
+        anthropicAdapter.invalidateModels()
+        geminiAdapter.invalidateModels()
+        deepseekAdapter.invalidateModels()
+        registerAdapters()
+      })
+    }
+
+    ctx.logger.info(
+      `google-vertex: providers "${PROVIDER}", "${GEMINI_PROVIDER}", and "${DEEPSEEK_PROVIDER}" registered for project ${anthropic.project}`
+      + ` (location ${anthropic.location}, credentials ${resolved.serviceAccountFile})`
+      + `. Claude: ${anthropic.models.map(model => model.id).join(', ')}${pinnedClaude ? '' : ' (+ live discovery)'}`
+      + `. Gemini: ${gemini.models.map(model => model.id).join(', ')}${pinnedGemini ? '' : ' (+ live discovery)'}`
+      + `. DeepSeek: ${deepseek.models.map(model => model.id).join(', ')}${pinnedDeepSeek ? '' : ' (+ live discovery)'}`,
+    )
   }
-
-  ctx.logger.info(
-    `google-vertex: providers "${PROVIDER}", "${GEMINI_PROVIDER}", and "${DEEPSEEK_PROVIDER}" registered for project ${anthropic.project}`
-    + ` (location ${anthropic.location}, credentials ${resolved.serviceAccountFile})`
-    + `. Claude: ${anthropic.models.map(model => model.id).join(', ')}${pinnedClaude ? '' : ' (+ live discovery)'}`
-    + `. Gemini: ${gemini.models.map(model => model.id).join(', ')}${pinnedGemini ? '' : ' (+ live discovery)'}`
-    + `. DeepSeek: ${deepseek.models.map(model => model.id).join(', ')}${pinnedDeepSeek ? '' : ' (+ live discovery)'}`,
-  )
+  
+  // Initial registration
+  registerAdapters()
 }

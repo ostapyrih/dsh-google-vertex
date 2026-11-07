@@ -69,34 +69,34 @@ export declare const DEFAULT_MAX_TOKENS = 32000;
  */
 export interface Config {
     /** Service-account JSON path, `~` allowed; defaults to `GOOGLE_APPLICATION_CREDENTIALS`. */
-    readonly serviceAccountFile?: string;
+    readonly serviceAccountFile: Volatile<string | undefined>;
     /**
      * Project id; defaults to `GOOGLE_CLOUD_PROJECT`, then `GCLOUD_PROJECT`, then
      * the credentials file's own `project_id`.
      */
-    readonly project?: string;
+    readonly project: Volatile<string | undefined>;
     /** Region, or `global` (the default); defaults to `GOOGLE_CLOUD_LOCATION`. */
-    readonly location: string;
+    readonly location: Volatile<string>;
     /** Claude model ids to advertise, replacing the built-in catalog. */
-    readonly models: string[];
+    readonly models: Volatile<string[]>;
     /** Gemini model ids to advertise, replacing the built-in catalog. */
-    readonly geminiModels: string[];
+    readonly geminiModels: Volatile<string[]>;
     /** DeepSeek model ids to advertise, replacing the built-in catalog. */
-    readonly deepseekModels: string[];
+    readonly deepseekModels: Volatile<string[]>;
     /**
      * Claude context window reported for every model; defaults to 200000. The
      * Gemini route reports {@link DEFAULT_GEMINI_CONTEXT_WINDOW} for every model
      * it serves, which is why this key has no Gemini counterpart.
      */
-    readonly contextWindow: number;
+    readonly contextWindow: Volatile<number>;
     /** Claude output cap applied when a caller omits one; defaults to 32000. */
-    readonly maxTokens: number;
+    readonly maxTokens: Volatile<number>;
     /**
      * Bound on the interval between two stream reads on either route; defaults to
      * 300000. A provider that stops sending is reported as `TIMEOUT` instead of
      * holding the turn open forever.
      */
-    readonly streamIdleTimeoutMs: number;
+    readonly streamIdleTimeoutMs: Volatile<number>;
     /**
      * Stamp written by the Refresh control; absent until the first manual refresh.
      * Volatile in the schema, so the settings document (which accepts only
@@ -113,35 +113,33 @@ export type Options = {
 /**
  * Row schema: defaults live here, so a deployment only states what it changes.
  *
- * `serviceAccountFile`, `project`, `models`, and `geminiModels` carry no
- * `.default()`: the first two fall back to the environment, and an omitted
+ * All fields are volatile so they can be edited in the GUI settings panel.
+ * `serviceAccountFile`, `project`, `models`, `geminiModels`, and `deepseekModels`
+ * carry no `.default()`: the first two fall back to the environment, and an omitted
  * catalog materializes empty, which `resolveConfig` treats exactly like an
  * absent one and replaces with the built-in list.
- *
- * `revalidatedAt` is volatile (the only kind of field the settings document
- * accepts) and carries no default: absence means "never refreshed manually".
  */
 export declare const Config: Schema<Schemastery.ObjectS<NoInfer<{
-    serviceAccountFile: Schema<string, string, "plain">;
-    project: Schema<string, string, "plain">;
-    location: Schema<string, string, "defined">;
-    models: Schema<string[], string[], "plain">;
-    geminiModels: Schema<string[], string[], "plain">;
-    deepseekModels: Schema<string[], string[], "plain">;
-    contextWindow: Schema<number, number, "defined">;
-    maxTokens: Schema<number, number, "defined">;
-    streamIdleTimeoutMs: Schema<number, number, "defined">;
+    serviceAccountFile: Schema<string, string, "volatile">;
+    project: Schema<string, string, "volatile">;
+    location: Schema<string, string, "volatile-defined">;
+    models: Schema<NoInfer<string[]>, NoInfer<string[]>, "volatile">;
+    geminiModels: Schema<NoInfer<string[]>, NoInfer<string[]>, "volatile">;
+    deepseekModels: Schema<NoInfer<string[]>, NoInfer<string[]>, "volatile">;
+    contextWindow: Schema<number, number, "volatile-defined">;
+    maxTokens: Schema<number, number, "volatile-defined">;
+    streamIdleTimeoutMs: Schema<number, number, "volatile-defined">;
     revalidatedAt: Schema<string, string, "volatile">;
 }>>, Schemastery.ObjectT<NoInfer<{
-    serviceAccountFile: Schema<string, string, "plain">;
-    project: Schema<string, string, "plain">;
-    location: Schema<string, string, "defined">;
-    models: Schema<string[], string[], "plain">;
-    geminiModels: Schema<string[], string[], "plain">;
-    deepseekModels: Schema<string[], string[], "plain">;
-    contextWindow: Schema<number, number, "defined">;
-    maxTokens: Schema<number, number, "defined">;
-    streamIdleTimeoutMs: Schema<number, number, "defined">;
+    serviceAccountFile: Schema<string, string, "volatile">;
+    project: Schema<string, string, "volatile">;
+    location: Schema<string, string, "volatile-defined">;
+    models: Schema<NoInfer<string[]>, NoInfer<string[]>, "volatile">;
+    geminiModels: Schema<NoInfer<string[]>, NoInfer<string[]>, "volatile">;
+    deepseekModels: Schema<NoInfer<string[]>, NoInfer<string[]>, "volatile">;
+    contextWindow: Schema<number, number, "volatile-defined">;
+    maxTokens: Schema<number, number, "volatile-defined">;
+    streamIdleTimeoutMs: Schema<number, number, "volatile-defined">;
     revalidatedAt: Schema<string, string, "volatile">;
 }>>, "plain">;
 /** Validated configuration plus the file it was read from. */
