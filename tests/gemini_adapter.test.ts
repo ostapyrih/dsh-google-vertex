@@ -308,3 +308,59 @@ test('a refused HTTP response classifies RESOURCE_EXHAUSTED the way the in-band 
   assert.equal(finish.reason.failure.providerRetryAfterMs, 12_000)
   assert.match(finish.reason.failure.message, /Resource exhausted\. Please try again later\./)
 })
+
+test('streams Gemini text in Express API key mode with x-goog-api-key', async () => {
+  const requests: { url: string; init: RequestInit }[] = []
+  const fetch: FetchLike = (url, init) => {
+    requests.push({ url, init })
+    return Promise.resolve(streamResponse([
+      'data: {"candidates":[{"content":{"role":"model","parts":[{"text":"OK"}]},"finishReason":"STOP"}]}\n\n',
+    ]))
+  }
+  const expressConfig: GeminiAdapterConfig = {
+    apiKey: 'AQ.test-key',
+    project: '',
+    location: 'global',
+    models: DEFAULT_GEMINI_MODELS,
+    maxTokens: 65_535,
+    streamIdleTimeoutMs: DEFAULT_STREAM_IDLE_TIMEOUT_MS,
+  }
+  const adapter = new GoogleVertexGeminiAdapter(expressConfig, { fetch })
+  const chunks = await collect(adapter, OPTIONS)
+
+  assert.equal(chunks.at(-1)?.type, 'finish')
+  assert.equal(
+    requests[0]?.url,
+    'https://aiplatform.googleapis.com/v1/publishers/google/models/gemini-3.5-flash:streamGenerateContent?alt=sse',
+  )
+  const headers = requests[0]?.init.headers as Record<string, string>
+  assert.equal(headers['x-goog-api-key'], 'AQ.test-key')
+  assert.equal(headers['authorization'], undefined)
+})
+
+test('streams Gemini text in project-scoped API key mode when project is set', async () => {
+  const requests: { url: string; init: RequestInit }[] = []
+  const fetch: FetchLike = (url, init) => {
+    requests.push({ url, init })
+    return Promise.resolve(streamResponse([
+      'data: {"candidates":[{"content":{"role":"model","parts":[{"text":"OK"}]},"finishReason":"STOP"}]}\n\n',
+    ]))
+  }
+  const projectKeyConfig: GeminiAdapterConfig = {
+    apiKey: 'AQ.test-key',
+    project: '859541262458',
+    location: 'global',
+    models: DEFAULT_GEMINI_MODELS,
+    maxTokens: 65_535,
+    streamIdleTimeoutMs: DEFAULT_STREAM_IDLE_TIMEOUT_MS,
+  }
+  const adapter = new GoogleVertexGeminiAdapter(projectKeyConfig, { fetch })
+  await collect(adapter, OPTIONS)
+
+  assert.equal(
+    requests[0]?.url,
+    'https://aiplatform.googleapis.com/v1/projects/859541262458/locations/global/publishers/google/models/gemini-3.5-flash:streamGenerateContent?alt=sse',
+  )
+  const headers = requests[0]?.init.headers as Record<string, string>
+  assert.equal(headers['x-goog-api-key'], 'AQ.test-key')
+})

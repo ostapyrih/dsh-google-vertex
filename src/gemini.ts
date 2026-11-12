@@ -59,13 +59,17 @@ export const DEFAULT_GEMINI_MODELS: readonly VertexModel[] = [
 
 /**
  * The streaming publisher path for one Gemini model.
- * @param project - Google Cloud project id.
+ * @param project - Google Cloud project id (may be empty in Express API-key mode).
  * @param location - region, or `global`.
  * @param model - publisher model id, e.g. `gemini-3.5-flash`.
+ * @param apiKey - optional Vertex Express API key; when set without a project, uses the Express publisher path.
  * @returns the absolute request URL, with the SSE response encoding.
  */
-export function geminiEndpointFor(project: string, location: string, model: string): string {
+export function geminiEndpointFor(project: string, location: string, model: string, apiKey?: string): string {
   const origin = endpointOrigin(location)
+  if (apiKey !== undefined && (project.length === 0 || project === 'express')) {
+    return `${origin}/${API_VERSION}/publishers/google/models/${encodeURIComponent(model)}:streamGenerateContent?alt=sse`
+  }
   const path = `/${API_VERSION}/projects/${encodeURIComponent(project)}/locations/${encodeURIComponent(location)}`
     + `/publishers/google/models/${encodeURIComponent(model)}:streamGenerateContent?alt=sse`
   return `${origin}${path}`

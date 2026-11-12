@@ -31,7 +31,8 @@ import type { GenerateOptions, StreamChunk } from './host.ts'
 
 /** Resolved adapter configuration for the Gemini route. */
 export interface GeminiAdapterConfig extends VertexWireConfig {
-  readonly serviceAccount: ServiceAccount
+  readonly serviceAccount?: ServiceAccount
+  readonly apiKey?: string
   readonly models: readonly VertexModel[]
   /** Bound on the interval between two stream reads, in milliseconds. */
   readonly streamIdleTimeoutMs: number
@@ -65,8 +66,14 @@ export class GoogleVertexGeminiAdapter extends VertexPublisherAdapter<GeminiAdap
     super({
       providerName: 'Google Vertex AI (Gemini)',
       capacity: GEMINI_CAPACITY,
-      describe: row =>
-        `Google Gemini on Vertex AI (project ${row.project}, ${row.location}).`,
+      describe: (row) => {
+        if (row.apiKey !== undefined) {
+          return row.project.length > 0 && row.project !== 'express'
+            ? `Google Gemini on Vertex AI (project ${row.project}, ${row.location}, API key).`
+            : `Google Gemini on Vertex AI (Express API key, ${row.location}).`
+        }
+        return `Google Gemini on Vertex AI (project ${row.project}, ${row.location}).`
+      },
     }, config, options)
   }
 
@@ -82,7 +89,7 @@ export class GoogleVertexGeminiAdapter extends VertexPublisherAdapter<GeminiAdap
    */
   stream(options: GenerateOptions): AsyncIterable<StreamChunk> {
     return streamVertex(this.config, options, this.fetch, this.tokens, model => new GeminiStreamTranslator(model), {
-      endpoint: (model, config) => geminiEndpointFor(config.project, config.location, model),
+      endpoint: (model, config) => geminiEndpointFor(config.project, config.location, model, config.apiKey),
       body: (request, config) => buildGeminiRequest(request, config),
       truncatedMessage: model => `google-vertex: model "${model}" stream ended before a finish reason`,
     })

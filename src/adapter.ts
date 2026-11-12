@@ -70,7 +70,8 @@ export interface TokenProvider {
  * catalog entries, which is why `models` is typed loosely here.
  */
 interface VertexAdapterConfig {
-  readonly serviceAccount: ServiceAccount
+  readonly serviceAccount?: ServiceAccount
+  readonly apiKey?: string
   readonly project: string
   readonly location: string
   readonly models: readonly VertexModel[]
@@ -204,7 +205,7 @@ export async function* streamVertex(
   config: VertexAdapterConfig,
   options: GenerateOptions,
   fetch: FetchLike,
-  tokens: TokenProvider,
+  tokens: TokenProvider | undefined,
   makeTranslator: (model: string) => StreamTranslatorLike,
   pump: StreamPumpOptions,
 ): AsyncGenerator<StreamChunk> {
@@ -254,37 +255,46 @@ export async function* streamVertex(
     idleTimer = undefined
   }
 
-  let token: string
-  armIdle()
-  try {
-    // The token mint is a network call too: an unbounded one stalls the same
-    // way a stalled body does.
-    token = await tokens.get(signal)
-  } catch (error) {
-    if (idleTimedOut) {
-      yield errorFinish(idleTimeoutFailure(config.streamIdleTimeoutMs))
+  let token: string | undefined
+  if (config.apiKey === undefined) {
+    if (tokens === undefined) {
+      yield errorFinish(credentialFailure(new Error('no credentials configured')))
       return
     }
-    if (options.signal?.aborted === true) {
-      yield transportFinish(options, error)
+    armIdle()
+    try {
+      // The token mint is a network call too: an unbounded one stalls the same
+      // way a stalled body does.
+      token = await tokens.get(signal)
+    } catch (error) {
+      if (idleTimedOut) {
+        yield errorFinish(idleTimeoutFailure(config.streamIdleTimeoutMs))
+        return
+      }
+      if (options.signal?.aborted === true) {
+        yield transportFinish(options, error)
+        return
+      }
+      yield errorFinish(credentialFailure(error))
       return
+    } finally {
+      disarmIdle()
     }
-    yield errorFinish(credentialFailure(error))
-    return
-  } finally {
-    disarmIdle()
   }
 
   let response: Response
   armIdle()
   try {
+    const authHeaders: Record<string, string> = config.apiKey !== undefined
+      ? { 'x-goog-api-key': config.apiKey }
+      : { 'authorization': `Bearer ${token}` }
     response = await fetch(pump.endpoint(model, config), {
       method: 'POST',
       headers: {
         'content-type': 'application/json',
         'accept': 'text/event-stream',
         ...attributionHeaders(),
-        'authorization': `Bearer ${token}`,
+        ...authHeaders,
       },
       body: JSON.stringify(pump.body(options, config)),
       signal,
@@ -301,7 +311,7 @@ export async function* streamVertex(
   }
 
   if (!response.ok) {
-    if (response.status === 401) tokens.invalidate?.(token)
+    if (response.status === 401 && token !== undefined) tokens.invalidate?.(token)
     let body: string
     armIdle()
     try {
@@ -393,7 +403,7 @@ export abstract class VertexPublisherAdapter<C extends VertexAdapterConfig> impl
   /** The transport this adapter was built with. */
   protected readonly fetch: FetchLike
   /** The token source this adapter asks before each request. */
-  protected readonly tokens: TokenProvider
+  protected readonly tokens: TokenProvider | undefined
 
   /**
    * @param metadata - display name, capacities, and description text.
@@ -408,7 +418,9 @@ export abstract class VertexPublisherAdapter<C extends VertexAdapterConfig> impl
     this.#metadata = metadata
     this.config = config
     this.fetch = options.fetch ?? ((input, init) => globalThis.fetch(input, init))
-    this.tokens = options.tokens ?? new ServiceAccountTokens(config.serviceAccount, { fetch: this.fetch })
+    this.tokens = options.tokens ?? (config.serviceAccount
+      ? new ServiceAccountTokens(config.serviceAccount, { fetch: this.fetch })
+      : undefined)
     this.#discover = options.discover
     this.#modelCache = new ModelCache(config.models)
   }
