@@ -246,9 +246,13 @@ test('readGeminiReplay refuses a foreign, cross-model, or misaligned envelope', 
   assert.equal(readGeminiReplay(message, 'gemini-2.5-pro'), undefined)
   assert.equal(readGeminiReplay({ ...message, source: { kind: 'plugin' } }, MODEL), undefined)
   assert.equal(readGeminiReplay({ ...message, source: { kind: 'model', replayState: { response: { kind: 'other' } } } }, MODEL), undefined)
-  assert.equal(readGeminiReplay({
+  assert.deepEqual(readGeminiReplay({
     ...message,
     source: { kind: 'model', replayState: geminiReplayState(MODEL, []) },
+  }, MODEL), [{ type: 'tool-call' }])
+  assert.equal(readGeminiReplay({
+    ...message,
+    source: { kind: 'model', replayState: { response: { kind: 'google-vertex-gemini', version: 1, model: MODEL }, blocks: 'bad' } },
   }, MODEL), undefined)
 })
 
@@ -372,8 +376,9 @@ test('a thought-only output cap preserves its length stop and billed usage', () 
   })
   assert.equal(translator.sawFinish, true)
   assert.deepEqual(translator.finish(), [
+    { type: 'block-end', index: 0, block: { type: 'reasoning', text: 'thinking' } },
     { type: 'usage', usage: { inputTokens: 120, outputTokens: 65535, reasoningTokens: 65535, totalTokens: 65655 } },
-    { type: 'finish', reason: { kind: 'max-tokens' }, replayState: geminiReplayState(MODEL, []) },
+    { type: 'finish', reason: { kind: 'max-tokens' }, replayState: geminiReplayState(MODEL, [{ type: 'reasoning' }]) },
   ])
 })
 
@@ -422,7 +427,7 @@ test('usage is emitted only when the provider reported a counter', () => {
   ])
 })
 
-test('thought summaries are dropped and a contentless response is an empty-response failure', () => {
+test('thought summaries stream as reasoning blocks with stop finish', () => {
   const translator = new GeminiStreamTranslator(MODEL)
   const emitted = translator.handle({
     candidates: [{
@@ -431,15 +436,17 @@ test('thought summaries are dropped and a contentless response is an empty-respo
     }],
     usageMetadata: { promptTokenCount: 2, candidatesTokenCount: 0, thoughtsTokenCount: 3, totalTokenCount: 5 },
   })
-  assert.deepEqual(emitted, [])
-  assert.deepEqual(translator.finish(), [{ type: 'usage', usage: { inputTokens: 2, outputTokens: 3, reasoningTokens: 3, totalTokens: 5 } }, {
-    type: 'finish',
-    reason: {
-      kind: 'error',
-      failure: {
-        message: 'google-vertex: the model completed the response with no content',
-        code: 'EMPTY_RESPONSE',
-      },
+  assert.deepEqual(emitted, [
+    { type: 'block-start', index: 0, blockType: 'reasoning' },
+    { type: 'reasoning-delta', index: 0, text: 'thinking hard' },
+  ])
+  assert.deepEqual(translator.finish(), [
+    { type: 'block-end', index: 0, block: { type: 'reasoning', text: 'thinking hard' } },
+    { type: 'usage', usage: { inputTokens: 2, outputTokens: 3, reasoningTokens: 3, totalTokens: 5 } },
+    {
+      type: 'finish',
+      reason: { kind: 'stop' },
+      replayState: geminiReplayState(MODEL, [{ type: 'reasoning' }]),
     },
-  }])
+  ])
 })

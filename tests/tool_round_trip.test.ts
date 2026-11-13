@@ -17,7 +17,7 @@ import { createToolResultMessage, ToolCallId } from '@deepseek-ai/dsh-llm'
 
 import { GoogleVertexAnthropicAdapter, type VertexAnthropicConfig } from '../src/adapter.ts'
 import type { FetchLike, ServiceAccount } from '../src/auth.ts'
-import { buildGeminiRequest, DEFAULT_GEMINI_MODELS } from '../src/gemini.ts'
+import { buildGeminiRequest, DEFAULT_GEMINI_MODELS, geminiReplayState } from '../src/gemini.ts'
 import { GoogleVertexGeminiAdapter, type GeminiAdapterConfig } from '../src/gemini_adapter.ts'
 import type { GenerateOptions } from '../src/host.ts'
 import { buildRequestBody, DEFAULT_STREAM_IDLE_TIMEOUT_MS, type VertexWireConfig } from '../src/wire.ts'
@@ -95,7 +95,12 @@ test('a harness tool message becomes the tool_result block Anthropic requires', 
 })
 
 test('a harness tool message becomes the functionResponse part Gemini requires', () => {
-  const body = buildGeminiRequest(toolRoundTrip('gemini-3.5-flash'), { ...WIRE, maxTokens: 65_535 })
+  const options = toolRoundTrip('gemini-3.5-flash')
+  options.messages[1] = {
+    ...options.messages[1]!,
+    source: { kind: 'model', replayState: geminiReplayState('gemini-3.5-flash', [{ type: 'tool-call', thoughtSignature: 'sig_1' }]) },
+  }
+  const body = buildGeminiRequest(options, { ...WIRE, maxTokens: 65_535 })
 
   assert.deepEqual(body.contents[2], {
     role: 'user',
@@ -140,11 +145,16 @@ test('the Gemini route sends the functionResponse on the wire', async () => {
     return Promise.resolve(streamResponse(['data: {"candidates":[{"content":{"parts":[{"text":"ok"}]},"finishReason":"STOP"}]}\n\n']))
   }
   const adapter = new GoogleVertexGeminiAdapter(GEMINI_CONFIG, { fetch, tokens: tokens() })
-  await collect(adapter, toolRoundTrip('gemini-3.5-flash'))
+  const options = toolRoundTrip('gemini-3.5-flash')
+  options.messages[1] = {
+    ...options.messages[1]!,
+    source: { kind: 'model', replayState: geminiReplayState('gemini-3.5-flash', [{ type: 'tool-call', thoughtSignature: 'sig_1' }]) },
+  }
+  await collect(adapter, options)
 
   assert.deepEqual(bodies[0]?.['contents'], [
     { role: 'user', parts: [{ text: 'weather in Paris?' }] },
-    { role: 'model', parts: [{ functionCall: { name: 'get_weather', args: { city: 'Paris' }, id: 'call_1' } }] },
+    { role: 'model', parts: [{ functionCall: { name: 'get_weather', args: { city: 'Paris' }, id: 'call_1' }, thoughtSignature: 'sig_1' }] },
     {
       role: 'user',
       parts: [{
