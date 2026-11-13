@@ -29,7 +29,10 @@ import { ServiceAccountTokens, VertexAuthError } from './auth.ts'
 import type { FetchLike, ServiceAccount } from './auth.ts'
 import { ModelCache } from './discovery.ts'
 import type {
+  AttachmentStoreLike,
   GenerateOptions,
+  ImageAttachmentRef,
+  ImageRequestTarget,
   LlmAdapterLike,
   LlmFailure,
   LlmModelInfo,
@@ -99,6 +102,8 @@ interface AdapterMetadata<C extends VertexAdapterConfig> {
   readonly capacity: { contextWindow: number; defaultMaxTokens: number }
   /** Model description reported for this route, project and region included. */
   readonly describe: (config: C) => string
+  /** Accepted input modalities for this route; defaults to text-only. */
+  readonly inputModalities?: readonly string[]
 }
 
 /** Terminal error finish carrying one failure. */
@@ -170,7 +175,7 @@ interface StreamPumpOptions {
   /** The request URL for the chosen model. */
   readonly endpoint: (model: string, config: VertexAdapterConfig) => string
   /** The request body for the chosen model. */
-  readonly body: (options: GenerateOptions, config: VertexAdapterConfig) => unknown
+  readonly body: (options: GenerateOptions, config: VertexAdapterConfig) => unknown | Promise<unknown>
   /** Failure named when the body ended without the provider's finish. */
   readonly truncatedMessage: (model: string) => string
 }
@@ -296,7 +301,7 @@ export async function* streamVertex(
         ...attributionHeaders(),
         ...authHeaders,
       },
-      body: JSON.stringify(pump.body(options, config)),
+      body: JSON.stringify(await pump.body(options, config)),
       signal,
     })
   } catch (error) {
@@ -404,16 +409,23 @@ export abstract class VertexPublisherAdapter<C extends VertexAdapterConfig> impl
   protected readonly fetch: FetchLike
   /** The token source this adapter asks before each request. */
   protected readonly tokens: TokenProvider | undefined
+  /** Optional attachment store resolver for multimodal routes. */
+  protected readonly resolveAttachments: (() => AttachmentStoreLike | undefined) | undefined
 
   /**
    * @param metadata - display name, capacities, and description text.
    * @param config - the resolved configuration this adapter serves.
-   * @param options - transport, token-source, and discovery overrides.
+   * @param options - transport, token-source, discovery, and attachment overrides.
    */
   constructor(
     metadata: AdapterMetadata<C>,
     config: C,
-    options: { fetch?: FetchLike; tokens?: TokenProvider; discover?: () => Promise<readonly VertexModel[]> } = {},
+    options: {
+      fetch?: FetchLike
+      tokens?: TokenProvider
+      discover?: () => Promise<readonly VertexModel[]>
+      resolveAttachments?: () => AttachmentStoreLike | undefined
+    } = {},
   ) {
     this.#metadata = metadata
     this.config = config
@@ -421,6 +433,7 @@ export abstract class VertexPublisherAdapter<C extends VertexAdapterConfig> impl
     this.tokens = options.tokens ?? (config.serviceAccount
       ? new ServiceAccountTokens(config.serviceAccount, { fetch: this.fetch })
       : undefined)
+    this.resolveAttachments = options.resolveAttachments
     this.#discover = options.discover
     this.#modelCache = new ModelCache(config.models)
   }
@@ -446,6 +459,11 @@ export abstract class VertexPublisherAdapter<C extends VertexAdapterConfig> impl
   /** No route charges visual tokens: these adapters are text-only. */
   imageRequestPricing(_provider: string, _model: string): undefined {
     return undefined
+  }
+
+  /** Preserve normalized image dimensions and byte budget for image-capable routes. */
+  imageRequestTarget(_provider: string, _model: string, image: ImageAttachmentRef): ImageRequestTarget {
+    return { width: image.width, height: image.height, maxBytes: image.bytes }
   }
 
   /**
@@ -498,7 +516,7 @@ export abstract class VertexPublisherAdapter<C extends VertexAdapterConfig> impl
       id: model,
       name,
       description: this.#metadata.describe(this.config),
-      inputModalities: ['text'],
+      inputModalities: this.#metadata.inputModalities ?? ['text'],
     }
   }
 }

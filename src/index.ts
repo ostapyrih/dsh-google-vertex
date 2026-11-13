@@ -339,7 +339,10 @@ export function apply(ctx: HostContext, config: Config): void {
     ctx.llm.registerAdapter([PROVIDER], anthropicAdapter)
   }
 
-  const geminiAdapter = new GoogleVertexGeminiAdapter(gemini, discoverGemini === undefined ? {} : { discover: discoverGemini })
+  const geminiAdapter = new GoogleVertexGeminiAdapter(gemini, {
+    ...discoverGemini === undefined ? {} : { discover: discoverGemini },
+    resolveAttachments: () => ctx.get?.('attachments'),
+  })
   ctx.llm.registerAdapter([GEMINI_PROVIDER], geminiAdapter)
 
   let deepseekAdapter: GoogleVertexDeepSeekAdapter | undefined

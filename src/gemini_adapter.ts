@@ -20,14 +20,20 @@ import {
 import type { TokenProvider, VertexModel } from './adapter.ts'
 import type { FetchLike, ServiceAccount } from './auth.ts'
 import {
-  buildGeminiRequest,
   DEFAULT_GEMINI_CONTEXT_WINDOW,
   DEFAULT_GEMINI_MAX_TOKENS,
   GeminiStreamTranslator,
   geminiEndpointFor,
+  prepareGeminiRequest,
 } from './gemini.ts'
 import type { VertexWireConfig } from './wire.ts'
-import type { GenerateOptions, LlmResolvedModelInfo, ReasoningEffortOption, StreamChunk } from './host.ts'
+import type {
+  AttachmentStoreLike,
+  GenerateOptions,
+  LlmResolvedModelInfo,
+  ReasoningEffortOption,
+  StreamChunk,
+} from './host.ts'
 
 /** Selectable reasoning efforts exposed for Gemini models. */
 export const GEMINI_REASONING_EFFORTS: readonly ReasoningEffortOption[] = [
@@ -70,11 +76,17 @@ export class GoogleVertexGeminiAdapter extends VertexPublisherAdapter<GeminiAdap
    */
   constructor(
     config: GeminiAdapterConfig,
-    options: { fetch?: FetchLike; tokens?: TokenProvider; discover?: () => Promise<readonly VertexModel[]> } = {},
+    options: {
+      fetch?: FetchLike
+      tokens?: TokenProvider
+      discover?: () => Promise<readonly VertexModel[]>
+      resolveAttachments?: () => AttachmentStoreLike | undefined
+    } = {},
   ) {
     super({
       providerName: 'Google Vertex AI (Gemini)',
       capacity: GEMINI_CAPACITY,
+      inputModalities: ['text', 'image'],
       describe: (row) => {
         if (row.apiKey !== undefined) {
           return row.project.length > 0 && row.project !== 'express'
@@ -112,7 +124,7 @@ export class GoogleVertexGeminiAdapter extends VertexPublisherAdapter<GeminiAdap
   stream(options: GenerateOptions): AsyncIterable<StreamChunk> {
     return streamVertex(this.config, options, this.fetch, this.tokens, model => new GeminiStreamTranslator(model), {
       endpoint: (model, config) => geminiEndpointFor(config.project, config.location, model, config.apiKey),
-      body: (request, config) => buildGeminiRequest(request, config),
+      body: (request, config) => prepareGeminiRequest(request, config, this.resolveAttachments?.()),
       truncatedMessage: model => `google-vertex: model "${model}" stream ended before a finish reason`,
     })
   }
