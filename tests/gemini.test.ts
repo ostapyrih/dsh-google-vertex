@@ -162,6 +162,53 @@ test('the Gemini body maps oneOf to the nullable/anyOf shape the Schema message 
   assert.equal(JSON.stringify(body).includes('oneOf'), false)
 })
 
+test('the Gemini body rewrites const to the one-value enum the Schema message carries', () => {
+  // `task_board_update`'s `permission` parameter is
+  // `oneOf: [{ type: 'string', enum: [...] }, { type: 'string', const: '' }]`,
+  // so the oneOf rewrite handed Vertex a `const` member its `Schema` message has
+  // no field for: `Invalid JSON payload received. Unknown name "const" at
+  // 'tools[0].function_declarations[45].parameters.properties[6].value
+  // .any_of[1]'`. JSON Schema `const` is the one-value `enum` — but the
+  // endpoint refuses an empty enum member too (`any_of[1].enum[0]: cannot be
+  // empty`), so an empty-string literal is dropped like a non-string one.
+  const body = buildGeminiRequest({
+    model: MODEL,
+    tools: [{
+      name: 'task_board_update',
+      description: 'edit',
+      parameters: {
+        type: 'object',
+        properties: {
+          permission: {
+            oneOf: [
+              { type: 'string', enum: ['read-only', 'workspace-write', 'danger-full-access'] },
+              { type: 'string', const: '' },
+            ],
+          },
+          mode: { oneOf: [{ type: 'string', const: 'liangshen' }, { type: 'null' }] },
+          retries: { oneOf: [{ type: 'integer' }, { type: 'integer', const: 3 }] },
+        },
+      },
+    }],
+    messages: [{ id: '1', role: 'user', content: [{ type: 'text', text: 'hi' }] }],
+  }, CONFIG)
+
+  assert.deepEqual(body.tools?.[0]?.functionDeclarations[0]?.parameters, {
+    type: 'object',
+    properties: {
+      permission: {
+        anyOf: [
+          { type: 'string', enum: ['read-only', 'workspace-write', 'danger-full-access'] },
+          { type: 'string' },
+        ],
+      },
+      mode: { type: 'string', enum: ['liangshen'], nullable: true },
+      retries: { anyOf: [{ type: 'integer' }, { type: 'integer' }] },
+    },
+  })
+  assert.equal(JSON.stringify(body).includes('const'), false)
+})
+
 test('a tool round trip carries the function name and Vertex thought signature', () => {
   const assistant: Message = {
     id: '2',

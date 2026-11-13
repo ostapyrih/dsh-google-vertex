@@ -67,6 +67,8 @@ export interface GenerateOptions {
   readonly temperature?: number
   readonly maxTokens?: number
   readonly stop?: readonly string[]
+  readonly reasoningEffort?: string
+  readonly reasoning?: string
   readonly signal?: AbortSignal
 }
 
@@ -121,6 +123,18 @@ export interface LlmProviderInfo {
   readonly name: string
 }
 
+/** One selectable reasoning effort level for a model. */
+export interface ReasoningEffortOption {
+  readonly id: string
+  readonly name: string
+}
+
+/** Reasoning capability metadata advertised by an exact model resolution. */
+export interface LlmModelReasoning {
+  readonly efforts: readonly ReasoningEffortOption[]
+  readonly defaultEffort?: string
+}
+
 /** One adapter-advertised model. */
 export interface LlmModelInfo {
   readonly provider: string
@@ -134,6 +148,7 @@ export interface LlmModelInfo {
 export interface LlmResolvedModelInfo extends LlmModelInfo {
   readonly context?: { readonly contextWindow: number }
   readonly defaultMaxTokens?: number
+  readonly reasoning?: LlmModelReasoning
 }
 
 /** What `prepareCall` binds: exact model metadata plus one-generation dispatch. */

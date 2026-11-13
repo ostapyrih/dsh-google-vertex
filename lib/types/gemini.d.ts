@@ -34,12 +34,13 @@ export declare const DEFAULT_GEMINI_MAX_TOKENS = 65535;
 export declare const DEFAULT_GEMINI_MODELS: readonly VertexModel[];
 /**
  * The streaming publisher path for one Gemini model.
- * @param project - Google Cloud project id.
+ * @param project - Google Cloud project id (may be empty in Express API-key mode).
  * @param location - region, or `global`.
  * @param model - publisher model id, e.g. `gemini-3.5-flash`.
+ * @param apiKey - optional Vertex Express API key; when set without a project, uses the Express publisher path.
  * @returns the absolute request URL, with the SSE response encoding.
  */
-export declare function geminiEndpointFor(project: string, location: string, model: string): string;
+export declare function geminiEndpointFor(project: string, location: string, model: string, apiKey?: string): string;
 /** One function call the model requested. */
 interface GeminiFunctionCall {
     name: string;
@@ -86,6 +87,10 @@ export interface GeminiRequestBody {
         temperature?: number;
         maxOutputTokens?: number;
         stopSequences?: string[];
+        thinkingConfig?: {
+            thinkingLevel: string;
+            includeThoughts: boolean;
+        };
     };
 }
 /**
@@ -93,11 +98,11 @@ export interface GeminiRequestBody {
  *
  * Vertex requires the thought signature of a function call to be echoed when the
  * call is replayed with its result; dropping it is a 400
- * ("Function call is missing a thought_signature"). Text parts can carry one
- * too, so the entry is kept for both block kinds.
+ * ("Function call is missing a thought_signature"). Text and reasoning parts
+ * can carry one too, so the entry is kept for all three block kinds.
  */
 interface GeminiReplayBlock {
-    readonly type: 'text' | 'tool-call';
+    readonly type: 'text' | 'reasoning' | 'tool-call';
     readonly thoughtSignature?: string;
 }
 /** The envelope the harness stores on an assistant message and hands back. */
@@ -176,7 +181,8 @@ export declare function mapGeminiFinishReason(reason: string | undefined, sawToo
  * Translate Gemini's `streamGenerateContent` chunks into harness chunks.
  *
  * Gemini streams whole parts rather than deltas, so the shape of this translator
- * is: text parts append to one open text block, a function call closes that block
+ * is: reasoning parts open a reasoning block, text parts close any open reasoning
+ * block and append to one open text block, a function call closes any open block
  * and is itself closed immediately (arguments arrive complete), and the terminal
  * chunk carries usage plus the stop reason.
  */

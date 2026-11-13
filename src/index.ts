@@ -134,6 +134,8 @@ export interface Config {
    * holding the turn open forever.
    */
   readonly streamIdleTimeoutMs: number
+  /** Default reasoning effort for Gemini models (`low`, `medium`, `high`). */
+  readonly reasoningEffort: string
   /**
    * Stamp written by the Refresh control; absent until the first manual refresh.
    * Volatile in the schema, so the settings document (which accepts only
@@ -169,6 +171,7 @@ export const Config = Schema.object({
   contextWindow: Schema.number().step(1).min(1).default(DEFAULT_CONTEXT_WINDOW),
   maxTokens: Schema.number().step(1).min(1).default(DEFAULT_MAX_TOKENS),
   streamIdleTimeoutMs: Schema.number().min(Number.MIN_VALUE).max(MAX_TIMER_DELAY_MS).default(DEFAULT_STREAM_IDLE_TIMEOUT_MS),
+  reasoningEffort: Schema.string().default('medium'),
   revalidatedAt: Schema.string().volatile(),
 })
 
@@ -176,7 +179,7 @@ export const Config = Schema.object({
 interface ResolvedConfig {
   readonly anthropic: VertexAnthropicConfig
   readonly gemini: GeminiAdapterConfig
-  readonly deepseek: DeepSeekAdapterConfig
+  readonly deepseek: DeepSeekAdapterConfig | undefined
   /** Vertex AI API key, when configured. */
   readonly apiKey?: string
   /** Absolute path of the service-account file, for the mount log line. */
@@ -254,6 +257,20 @@ export function resolveConfig(config: Options = {}, env: NodeJS.ProcessEnv = pro
 
   const streamIdleTimeoutMs = filled.streamIdleTimeoutMs
 
+  // Express/API-key mode has no service account, so the DeepSeek adapters are
+  // never mounted; leave the section unset rather than fabricate one.
+  const deepseek: DeepSeekAdapterConfig | undefined = serviceAccount === undefined
+    ? undefined
+    : {
+        serviceAccount,
+        project,
+        location,
+        models: deepseekModels,
+        contextWindow: DEFAULT_DEEPSEEK_CONTEXT_WINDOW,
+        maxTokens: DEFAULT_DEEPSEEK_MAX_TOKENS,
+        streamIdleTimeoutMs,
+      }
+
   return {
     apiKey,
     serviceAccountFile,
@@ -274,16 +291,9 @@ export function resolveConfig(config: Options = {}, env: NodeJS.ProcessEnv = pro
       models: geminiModels,
       maxTokens: DEFAULT_GEMINI_MAX_TOKENS,
       streamIdleTimeoutMs,
+      reasoningEffort: filled.reasoningEffort,
     },
-    deepseek: {
-      serviceAccount,
-      project,
-      location,
-      models: deepseekModels,
-      contextWindow: DEFAULT_DEEPSEEK_CONTEXT_WINDOW,
-      maxTokens: DEFAULT_DEEPSEEK_MAX_TOKENS,
-      streamIdleTimeoutMs,
-    },
+    deepseek,
   }
 }
 
@@ -319,7 +329,7 @@ export function apply(ctx: HostContext, config: Config): void {
     : () => fetchGeminiModels(gemini.location, tokenSource, fetchFn, AbortSignal.timeout(Math.ceil(gemini.streamIdleTimeoutMs)))
 
   const pinnedDeepSeek = row.deepseekModels !== undefined && row.deepseekModels.length > 0
-  const discoverDeepSeek = pinnedDeepSeek || tokenSource === undefined
+  const discoverDeepSeek = pinnedDeepSeek || tokenSource === undefined || deepseek === undefined
     ? undefined
     : () => fetchDeepSeekModels(tokenSource, fetchFn, AbortSignal.timeout(Math.ceil(deepseek.streamIdleTimeoutMs)))
 
@@ -333,7 +343,7 @@ export function apply(ctx: HostContext, config: Config): void {
   ctx.llm.registerAdapter([GEMINI_PROVIDER], geminiAdapter)
 
   let deepseekAdapter: GoogleVertexDeepSeekAdapter | undefined
-  if (tokenSource !== undefined) {
+  if (tokenSource !== undefined && deepseek !== undefined) {
     deepseekAdapter = new GoogleVertexDeepSeekAdapter(deepseek, discoverDeepSeek === undefined ? {} : { discover: discoverDeepSeek })
     ctx.llm.registerAdapter([DEEPSEEK_PROVIDER], deepseekAdapter)
   }
@@ -358,7 +368,7 @@ export function apply(ctx: HostContext, config: Config): void {
   const modelSummary = [
     tokenSource !== undefined ? `Claude: ${anthropic.models.map(model => model.id).join(', ')}${pinnedClaude ? '' : ' (+ live discovery)'}` : undefined,
     `Gemini: ${gemini.models.map(model => model.id).join(', ')}${discoverGemini !== undefined ? ' (+ live discovery)' : ''}`,
-    tokenSource !== undefined ? `DeepSeek: ${deepseek.models.map(model => model.id).join(', ')}${pinnedDeepSeek ? '' : ' (+ live discovery)'}` : undefined,
+    deepseek !== undefined ? `DeepSeek: ${deepseek.models.map(model => model.id).join(', ')}${pinnedDeepSeek ? '' : ' (+ live discovery)'}` : undefined,
   ].filter(Boolean).join('. ')
 
   ctx.logger.info(

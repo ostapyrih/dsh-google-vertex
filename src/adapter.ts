@@ -311,7 +311,7 @@ export async function* streamVertex(
   }
 
   if (!response.ok) {
-    if (response.status === 401 && token !== undefined) tokens.invalidate?.(token)
+    if (response.status === 401 && token !== undefined) tokens?.invalidate?.(token)
     let body: string
     armIdle()
     try {

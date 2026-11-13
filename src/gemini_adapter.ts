@@ -27,7 +27,14 @@ import {
   geminiEndpointFor,
 } from './gemini.ts'
 import type { VertexWireConfig } from './wire.ts'
-import type { GenerateOptions, StreamChunk } from './host.ts'
+import type { GenerateOptions, LlmResolvedModelInfo, ReasoningEffortOption, StreamChunk } from './host.ts'
+
+/** Selectable reasoning efforts exposed for Gemini models. */
+export const GEMINI_REASONING_EFFORTS: readonly ReasoningEffortOption[] = [
+  { id: 'low', name: 'Low' },
+  { id: 'medium', name: 'Medium' },
+  { id: 'high', name: 'High' },
+]
 
 /** Resolved adapter configuration for the Gemini route. */
 export interface GeminiAdapterConfig extends VertexWireConfig {
@@ -36,6 +43,8 @@ export interface GeminiAdapterConfig extends VertexWireConfig {
   readonly models: readonly VertexModel[]
   /** Bound on the interval between two stream reads, in milliseconds. */
   readonly streamIdleTimeoutMs: number
+  /** Default reasoning effort when a caller omits one. */
+  readonly reasoningEffort?: string
 }
 
 /**
@@ -87,6 +96,19 @@ export class GoogleVertexGeminiAdapter extends VertexPublisherAdapter<GeminiAdap
    * the turn. The shared pump owns the watchdog, the token mint, and the SSE
    * loop; this route's finish is built at the end of the body.
    */
+  override async resolveModel(provider: string, model: string, signal?: AbortSignal): Promise<LlmResolvedModelInfo> {
+    const resolved = await super.resolveModel(provider, model, signal)
+    const configured = this.config.reasoningEffort
+    const defaultEffort = GEMINI_REASONING_EFFORTS.some(e => e.id === configured) ? configured : 'medium'
+    return {
+      ...resolved,
+      reasoning: {
+        efforts: GEMINI_REASONING_EFFORTS,
+        defaultEffort,
+      },
+    }
+  }
+
   stream(options: GenerateOptions): AsyncIterable<StreamChunk> {
     return streamVertex(this.config, options, this.fetch, this.tokens, model => new GeminiStreamTranslator(model), {
       endpoint: (model, config) => geminiEndpointFor(config.project, config.location, model, config.apiKey),

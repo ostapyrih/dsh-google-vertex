@@ -46,7 +46,8 @@ export interface TokenProvider {
  * catalog entries, which is why `models` is typed loosely here.
  */
 interface VertexAdapterConfig {
-    readonly serviceAccount: ServiceAccount;
+    readonly serviceAccount?: ServiceAccount;
+    readonly apiKey?: string;
     readonly project: string;
     readonly location: string;
     readonly models: readonly VertexModel[];
@@ -130,7 +131,7 @@ interface StreamPumpOptions {
  * @param pump - this route's endpoint, body, and terminal wording.
  * @yields every chunk the provider's stream completes.
  */
-export declare function streamVertex(config: VertexAdapterConfig, options: GenerateOptions, fetch: FetchLike, tokens: TokenProvider, makeTranslator: (model: string) => StreamTranslatorLike, pump: StreamPumpOptions): AsyncGenerator<StreamChunk>;
+export declare function streamVertex(config: VertexAdapterConfig, options: GenerateOptions, fetch: FetchLike, tokens: TokenProvider | undefined, makeTranslator: (model: string) => StreamTranslatorLike, pump: StreamPumpOptions): AsyncGenerator<StreamChunk>;
 /**
  * Duck-typed base for both Vertex publisher adapters.
  *
@@ -147,7 +148,7 @@ export declare abstract class VertexPublisherAdapter<C extends VertexAdapterConf
     /** The transport this adapter was built with. */
     protected readonly fetch: FetchLike;
     /** The token source this adapter asks before each request. */
-    protected readonly tokens: TokenProvider;
+    protected readonly tokens: TokenProvider | undefined;
     /**
      * @param metadata - display name, capacities, and description text.
      * @param config - the resolved configuration this adapter serves.
