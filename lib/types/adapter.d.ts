@@ -24,7 +24,7 @@
  * @module dsh-google-vertex/adapter
  */
 import type { FetchLike, ServiceAccount } from './auth.ts';
-import type { GenerateOptions, LlmAdapterLike, LlmModelInfo, LlmProviderInfo, LlmResolvedModelInfo, PreparedAdapterCall, StreamChunk } from './host.ts';
+import type { AttachmentStoreLike, GenerateOptions, ImageAttachmentRef, ImageRequestTarget, LlmAdapterLike, LlmModelInfo, LlmProviderInfo, LlmResolvedModelInfo, PreparedAdapterCall, StreamChunk } from './host.ts';
 /** One advertised model. */
 export interface VertexModel {
     readonly id: string;
@@ -76,6 +76,8 @@ interface AdapterMetadata<C extends VertexAdapterConfig> {
     };
     /** Model description reported for this route, project and region included. */
     readonly describe: (config: C) => string;
+    /** Accepted input modalities for this route; defaults to text-only. */
+    readonly inputModalities?: readonly string[];
 }
 /**
  * One provider translator, as the shared pump reads it.
@@ -101,7 +103,7 @@ interface StreamPumpOptions {
     /** The request URL for the chosen model. */
     readonly endpoint: (model: string, config: VertexAdapterConfig) => string;
     /** The request body for the chosen model. */
-    readonly body: (options: GenerateOptions, config: VertexAdapterConfig) => unknown;
+    readonly body: (options: GenerateOptions, config: VertexAdapterConfig) => unknown | Promise<unknown>;
     /** Failure named when the body ended without the provider's finish. */
     readonly truncatedMessage: (model: string) => string;
 }
@@ -149,15 +151,18 @@ export declare abstract class VertexPublisherAdapter<C extends VertexAdapterConf
     protected readonly fetch: FetchLike;
     /** The token source this adapter asks before each request. */
     protected readonly tokens: TokenProvider | undefined;
+    /** Optional attachment store resolver for multimodal routes. */
+    protected readonly resolveAttachments: (() => AttachmentStoreLike | undefined) | undefined;
     /**
      * @param metadata - display name, capacities, and description text.
      * @param config - the resolved configuration this adapter serves.
-     * @param options - transport, token-source, and discovery overrides.
+     * @param options - transport, token-source, discovery, and attachment overrides.
      */
     constructor(metadata: AdapterMetadata<C>, config: C, options?: {
         fetch?: FetchLike;
         tokens?: TokenProvider;
         discover?: () => Promise<readonly VertexModel[]>;
+        resolveAttachments?: () => AttachmentStoreLike | undefined;
     });
     /** {@inheritDoc LlmAdapterLike.providerInfo} */
     providerInfo(provider: string): LlmProviderInfo;
@@ -173,6 +178,8 @@ export declare abstract class VertexPublisherAdapter<C extends VertexAdapterConf
     providerRetryPolicy(_provider: string): undefined;
     /** No route charges visual tokens: these adapters are text-only. */
     imageRequestPricing(_provider: string, _model: string): undefined;
+    /** Preserve normalized image dimensions and byte budget for image-capable routes. */
+    imageRequestTarget(_provider: string, _model: string, image: ImageAttachmentRef): ImageRequestTarget;
     /**
      * The current model catalog, fetched from the provider when discovery is
      * configured, falling back to the static catalog on failure.

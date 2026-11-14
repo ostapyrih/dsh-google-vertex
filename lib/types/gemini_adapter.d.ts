@@ -16,7 +16,7 @@ import { VertexPublisherAdapter } from './adapter.ts';
 import type { TokenProvider, VertexModel } from './adapter.ts';
 import type { FetchLike, ServiceAccount } from './auth.ts';
 import type { VertexWireConfig } from './wire.ts';
-import type { GenerateOptions, LlmResolvedModelInfo, ReasoningEffortOption, StreamChunk } from './host.ts';
+import type { AttachmentStoreLike, GenerateOptions, LlmResolvedModelInfo, ReasoningEffortOption, StreamChunk } from './host.ts';
 /** Selectable reasoning efforts exposed for Gemini models. */
 export declare const GEMINI_REASONING_EFFORTS: readonly ReasoningEffortOption[];
 /** Resolved adapter configuration for the Gemini route. */
@@ -44,6 +44,7 @@ export declare class GoogleVertexGeminiAdapter extends VertexPublisherAdapter<Ge
         fetch?: FetchLike;
         tokens?: TokenProvider;
         discover?: () => Promise<readonly VertexModel[]>;
+        resolveAttachments?: () => AttachmentStoreLike | undefined;
     });
     /**
      * Stream one completion through `:streamGenerateContent?alt=sse`.

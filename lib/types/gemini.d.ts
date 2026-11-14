@@ -9,7 +9,7 @@
  *
  * @module dsh-google-vertex/gemini
  */
-import type { FinishReason, GenerateOptions, Message, StreamChunk, TokenUsage } from './host.ts';
+import type { AttachmentStoreLike, FinishReason, GenerateOptions, Message, RequestImageAttachment, StreamChunk, TokenUsage } from './host.ts';
 import type { VertexWireConfig } from './wire.ts';
 import type { VertexModel } from './adapter.ts';
 /** Harness code reported when the provider refused on safety grounds. */
@@ -47,15 +47,22 @@ interface GeminiFunctionCall {
     args?: Record<string, unknown>;
     id?: string;
 }
+/** One inline media payload. */
+interface GeminiInlineData {
+    mimeType: string;
+    data: string;
+}
 /** One function result being sent back. */
 interface GeminiFunctionResponse {
     name: string;
     id?: string;
     response: Record<string, unknown>;
+    parts?: GeminiPart[];
 }
 /** One content part on the wire. */
 interface GeminiPart {
     text?: string;
+    inlineData?: GeminiInlineData;
     thought?: boolean;
     thoughtSignature?: string;
     functionCall?: GeminiFunctionCall;
@@ -133,6 +140,8 @@ export declare function geminiReplayState(model: string, blocks: readonly Gemini
  * @returns index-aligned metadata, or undefined when unusable.
  */
 export declare function readGeminiReplay(message: Message, model: string): readonly GeminiReplayBlock[] | undefined;
+/** Resolve all non-offloaded image attachments referenced in the request. */
+export declare function prepareGeminiRequest(options: GenerateOptions, config: VertexWireConfig, attachments?: AttachmentStoreLike): Promise<GeminiRequestBody>;
 /**
  * Build the request body for one model call.
  *
@@ -144,9 +153,10 @@ export declare function readGeminiReplay(message: Message, model: string): reado
  * what keeps 2.5 Pro working, since that model refuses a zero thinking budget.
  * @param options - the harness request.
  * @param config - project, location, and default output cap.
+ * @param requestImages - optional resolved image attachments keyed by attachmentId.
  * @returns the wire body.
  */
-export declare function buildGeminiRequest(options: GenerateOptions, config: VertexWireConfig): GeminiRequestBody;
+export declare function buildGeminiRequest(options: GenerateOptions, config: VertexWireConfig, requestImages?: ReadonlyMap<string, RequestImageAttachment>): GeminiRequestBody;
 /** Raw usage counters as Vertex reports them. */
 interface GeminiUsageMetadata {
     promptTokenCount?: number;
