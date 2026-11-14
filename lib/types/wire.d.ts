@@ -99,6 +99,8 @@ export interface VertexWireConfig {
     location: string;
     /** Output cap materialized when a caller omits `maxTokens`. */
     maxTokens: number;
+    /** Default reasoning effort for Gemini models (`low`, `medium`, `high`). */
+    reasoningEffort?: string;
 }
 /**
  * Flatten a tool-role message's content to the text Vertex accepts.

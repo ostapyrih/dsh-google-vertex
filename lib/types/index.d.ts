@@ -68,6 +68,8 @@ export declare const DEFAULT_MAX_TOKENS = 32000;
  * adapter configuration.
  */
 export interface Config {
+    /** Vertex AI Express / project API key; defaults to `GOOGLE_CLOUD_API_KEY`. */
+    readonly apiKey?: string;
     /** Service-account JSON path, `~` allowed; defaults to `GOOGLE_APPLICATION_CREDENTIALS`. */
     readonly serviceAccountFile?: string;
     /**
@@ -97,6 +99,8 @@ export interface Config {
      * holding the turn open forever.
      */
     readonly streamIdleTimeoutMs: number;
+    /** Default reasoning effort for Gemini models (`low`, `medium`, `high`). */
+    readonly reasoningEffort: string;
     /**
      * Stamp written by the Refresh control; absent until the first manual refresh.
      * Volatile in the schema, so the settings document (which accepts only
@@ -122,6 +126,7 @@ export type Options = {
  * accepts) and carries no default: absence means "never refreshed manually".
  */
 export declare const Config: Schema<Schemastery.ObjectS<NoInfer<{
+    apiKey: Schema<string, string, "plain">;
     serviceAccountFile: Schema<string, string, "plain">;
     project: Schema<string, string, "plain">;
     location: Schema<string, string, "defined">;
@@ -131,8 +136,10 @@ export declare const Config: Schema<Schemastery.ObjectS<NoInfer<{
     contextWindow: Schema<number, number, "defined">;
     maxTokens: Schema<number, number, "defined">;
     streamIdleTimeoutMs: Schema<number, number, "defined">;
+    reasoningEffort: Schema<string, string, "defined">;
     revalidatedAt: Schema<string, string, "volatile">;
 }>>, Schemastery.ObjectT<NoInfer<{
+    apiKey: Schema<string, string, "plain">;
     serviceAccountFile: Schema<string, string, "plain">;
     project: Schema<string, string, "plain">;
     location: Schema<string, string, "defined">;
@@ -142,15 +149,18 @@ export declare const Config: Schema<Schemastery.ObjectS<NoInfer<{
     contextWindow: Schema<number, number, "defined">;
     maxTokens: Schema<number, number, "defined">;
     streamIdleTimeoutMs: Schema<number, number, "defined">;
+    reasoningEffort: Schema<string, string, "defined">;
     revalidatedAt: Schema<string, string, "volatile">;
 }>>, "plain">;
-/** Validated configuration plus the file it was read from. */
+/** Validated configuration plus the credential source it was read from. */
 interface ResolvedConfig {
     readonly anthropic: VertexAnthropicConfig;
     readonly gemini: GeminiAdapterConfig;
-    readonly deepseek: DeepSeekAdapterConfig;
+    readonly deepseek: DeepSeekAdapterConfig | undefined;
+    /** Vertex AI API key, when configured. */
+    readonly apiKey?: string;
     /** Absolute path of the service-account file, for the mount log line. */
-    readonly serviceAccountFile: string;
+    readonly serviceAccountFile?: string;
 }
 /**
  * Validate and normalize one configuration row.
@@ -163,7 +173,7 @@ interface ResolvedConfig {
  */
 export declare function resolveConfig(config?: Options, env?: NodeJS.ProcessEnv): ResolvedConfig;
 /**
- * Mount all three adapters.
+ * Mount the configured adapters.
  * @param ctx - host context; `ctx.llm` must be mounted (`inject` guarantees it).
  * @param config - this plugin's row, as the schema emits it.
  */

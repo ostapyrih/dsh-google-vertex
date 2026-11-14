@@ -110,7 +110,7 @@ test('the project falls back to the launch environment before the file', () => {
 })
 
 test('a missing credential, a missing project, and a bad region each fail loudly', () => {
-  assert.throws(() => resolveConfig({}, NO_ENV), /no service account configured/)
+  assert.throws(() => resolveConfig({}, NO_ENV), /no credentials configured/)
   assert.throws(
     () => resolveConfig({ serviceAccountFile: join(dir, 'absent.json') }, NO_ENV),
     /cannot read service account file/,
@@ -170,4 +170,23 @@ test('apply registers both routes and logs what it read', () => {
   assert.match(String(logs[0]), /google-vertex-gemini/)
   assert.match(String(logs[0]), /google-vertex-deepseek/)
   assert.match(String(logs[0]), /example-project/)
+})
+
+test('apiKey registers only Gemini and ignores GOOGLE_APPLICATION_CREDENTIALS when serviceAccountFile is omitted', () => {
+  const resolved = resolveConfig(
+    { apiKey: 'AQ.express-key' },
+    { GOOGLE_APPLICATION_CREDENTIALS: join(dir, 'nonexistent.json') },
+  )
+  assert.equal(resolved.gemini.apiKey, 'AQ.express-key')
+  assert.equal(resolved.gemini.project, '')
+  assert.equal(resolved.serviceAccountFile, undefined)
+
+  const registered: string[][] = []
+  const ctx = {
+    llm: { registerAdapter: (providers: string[]) => { registered.push(providers); return () => {} } },
+    logger: { info: () => {}, warn: () => {} },
+  } as unknown as HostContext
+
+  apply(ctx, Config({ apiKey: 'AQ.express-key' }))
+  assert.deepEqual(registered, [[GEMINI_PROVIDER]])
 })

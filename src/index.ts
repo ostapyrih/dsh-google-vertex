@@ -103,6 +103,8 @@ export const DEFAULT_MAX_TOKENS = 32_000
  * adapter configuration.
  */
 export interface Config {
+  /** Vertex AI Express / project API key; defaults to `GOOGLE_CLOUD_API_KEY`. */
+  readonly apiKey?: string
   /** Service-account JSON path, `~` allowed; defaults to `GOOGLE_APPLICATION_CREDENTIALS`. */
   readonly serviceAccountFile?: string
   /**
@@ -132,6 +134,8 @@ export interface Config {
    * holding the turn open forever.
    */
   readonly streamIdleTimeoutMs: number
+  /** Default reasoning effort for Gemini models (`low`, `medium`, `high`). */
+  readonly reasoningEffort: string
   /**
    * Stamp written by the Refresh control; absent until the first manual refresh.
    * Volatile in the schema, so the settings document (which accepts only
@@ -157,6 +161,7 @@ export type Options = { [K in keyof Config]?: Config[K] extends Volatile<infer T
  * accepts) and carries no default: absence means "never refreshed manually".
  */
 export const Config = Schema.object({
+  apiKey: Schema.string(),
   serviceAccountFile: Schema.string(),
   project: Schema.string(),
   location: Schema.string().default(DEFAULT_LOCATION),
@@ -166,16 +171,19 @@ export const Config = Schema.object({
   contextWindow: Schema.number().step(1).min(1).default(DEFAULT_CONTEXT_WINDOW),
   maxTokens: Schema.number().step(1).min(1).default(DEFAULT_MAX_TOKENS),
   streamIdleTimeoutMs: Schema.number().min(Number.MIN_VALUE).max(MAX_TIMER_DELAY_MS).default(DEFAULT_STREAM_IDLE_TIMEOUT_MS),
+  reasoningEffort: Schema.string().default('medium'),
   revalidatedAt: Schema.string().volatile(),
 })
 
-/** Validated configuration plus the file it was read from. */
+/** Validated configuration plus the credential source it was read from. */
 interface ResolvedConfig {
   readonly anthropic: VertexAnthropicConfig
   readonly gemini: GeminiAdapterConfig
-  readonly deepseek: DeepSeekAdapterConfig
+  readonly deepseek: DeepSeekAdapterConfig | undefined
+  /** Vertex AI API key, when configured. */
+  readonly apiKey?: string
   /** Absolute path of the service-account file, for the mount log line. */
-  readonly serviceAccountFile: string
+  readonly serviceAccountFile?: string
 }
 
 /**
@@ -192,20 +200,24 @@ export function resolveConfig(config: Options = {}, env: NodeJS.ProcessEnv = pro
   // The credential path, the project, and the region keep their environment
   // fallbacks, so they are read off the raw row instead.
   const filled = Config(config)
-  const serviceAccountFile = filled.serviceAccountFile ?? env['GOOGLE_APPLICATION_CREDENTIALS']
-  if (serviceAccountFile === undefined || serviceAccountFile.trim().length === 0) {
+  const apiKey = (filled.apiKey ?? (filled.serviceAccountFile ? undefined : env['GOOGLE_CLOUD_API_KEY']))?.trim() || undefined
+  const serviceAccountFile = filled.serviceAccountFile ?? (apiKey !== undefined ? undefined : env['GOOGLE_APPLICATION_CREDENTIALS'])
+  if (apiKey === undefined && (serviceAccountFile === undefined || serviceAccountFile.trim().length === 0)) {
     throw new Error(
-      'google-vertex: no service account configured: set serviceAccountFile in this plugin\'s row,'
-      + ' or export GOOGLE_APPLICATION_CREDENTIALS to a service-account JSON path',
+      'google-vertex: no credentials configured: set apiKey or serviceAccountFile in this plugin\'s row,'
+      + ' or export GOOGLE_CLOUD_API_KEY / GOOGLE_APPLICATION_CREDENTIALS',
     )
   }
-  const serviceAccount = loadServiceAccount(serviceAccountFile)
+  const serviceAccount = serviceAccountFile !== undefined && serviceAccountFile.trim().length > 0
+    ? loadServiceAccount(serviceAccountFile)
+    : undefined
 
   const project = filled.project
     ?? env['GOOGLE_CLOUD_PROJECT']
     ?? env['GCLOUD_PROJECT']
-    ?? serviceAccount.project_id
-  if (project === undefined || project.trim().length === 0) {
+    ?? serviceAccount?.project_id
+    ?? (apiKey !== undefined ? '' : undefined)
+  if (project === undefined || (apiKey === undefined && project.trim().length === 0)) {
     throw new Error(
       `google-vertex: no project configured: set project in this plugin's row, or export`
       + ` GOOGLE_CLOUD_PROJECT, or use a service-account file that carries "project_id"`,
@@ -245,7 +257,22 @@ export function resolveConfig(config: Options = {}, env: NodeJS.ProcessEnv = pro
 
   const streamIdleTimeoutMs = filled.streamIdleTimeoutMs
 
+  // Express/API-key mode has no service account, so the DeepSeek adapters are
+  // never mounted; leave the section unset rather than fabricate one.
+  const deepseek: DeepSeekAdapterConfig | undefined = serviceAccount === undefined
+    ? undefined
+    : {
+        serviceAccount,
+        project,
+        location,
+        models: deepseekModels,
+        contextWindow: DEFAULT_DEEPSEEK_CONTEXT_WINDOW,
+        maxTokens: DEFAULT_DEEPSEEK_MAX_TOKENS,
+        streamIdleTimeoutMs,
+      }
+
   return {
+    apiKey,
     serviceAccountFile,
     anthropic: {
       serviceAccount,
@@ -257,27 +284,21 @@ export function resolveConfig(config: Options = {}, env: NodeJS.ProcessEnv = pro
       streamIdleTimeoutMs,
     },
     gemini: {
+      apiKey,
       serviceAccount,
       project,
       location,
       models: geminiModels,
       maxTokens: DEFAULT_GEMINI_MAX_TOKENS,
       streamIdleTimeoutMs,
+      reasoningEffort: filled.reasoningEffort,
     },
-    deepseek: {
-      serviceAccount,
-      project,
-      location,
-      models: deepseekModels,
-      contextWindow: DEFAULT_DEEPSEEK_CONTEXT_WINDOW,
-      maxTokens: DEFAULT_DEEPSEEK_MAX_TOKENS,
-      streamIdleTimeoutMs,
-    },
+    deepseek,
   }
 }
 
 /**
- * Mount all three adapters.
+ * Mount the configured adapters.
  * @param ctx - host context; `ctx.llm` must be mounted (`inject` guarantees it).
  * @param config - this plugin's row, as the schema emits it.
  */
@@ -292,44 +313,69 @@ export function apply(ctx: HostContext, config: Config): void {
   // by configuration. An empty or omitted list enables live discovery.
   const fetchFn: (input: string, init: RequestInit) => Promise<Response>
     = (input, init) => globalThis.fetch(input, init)
-  const tokenSource = new ServiceAccountTokens(anthropic.serviceAccount, { fetch: fetchFn })
+  const tokenSource = anthropic.serviceAccount
+    ? new ServiceAccountTokens(anthropic.serviceAccount, { fetch: fetchFn })
+    : undefined
 
   const pinnedClaude = row.models !== undefined && row.models.length > 0
-  const discoverClaude = pinnedClaude
+  const discoverClaude = pinnedClaude || tokenSource === undefined
     ? undefined
     : () => fetchClaudeModels(anthropic.location, tokenSource, fetchFn, AbortSignal.timeout(Math.ceil(anthropic.streamIdleTimeoutMs)))
 
   const pinnedGemini = row.geminiModels !== undefined && row.geminiModels.length > 0
-  const discoverGemini = pinnedGemini
+  // Express API keys do not support the v1beta1 publisher model list endpoint (401 UNAUTHENTICATED).
+  const discoverGemini = pinnedGemini || gemini.apiKey !== undefined || tokenSource === undefined
     ? undefined
     : () => fetchGeminiModels(gemini.location, tokenSource, fetchFn, AbortSignal.timeout(Math.ceil(gemini.streamIdleTimeoutMs)))
 
   const pinnedDeepSeek = row.deepseekModels !== undefined && row.deepseekModels.length > 0
-  const discoverDeepSeek = pinnedDeepSeek
+  const discoverDeepSeek = pinnedDeepSeek || tokenSource === undefined || deepseek === undefined
     ? undefined
     : () => fetchDeepSeekModels(tokenSource, fetchFn, AbortSignal.timeout(Math.ceil(deepseek.streamIdleTimeoutMs)))
 
-  const anthropicAdapter = new GoogleVertexAnthropicAdapter(anthropic, discoverClaude === undefined ? {} : { discover: discoverClaude })
-  const geminiAdapter = new GoogleVertexGeminiAdapter(gemini, discoverGemini === undefined ? {} : { discover: discoverGemini })
-  const deepseekAdapter = new GoogleVertexDeepSeekAdapter(deepseek, discoverDeepSeek === undefined ? {} : { discover: discoverDeepSeek })
-  ctx.llm.registerAdapter([PROVIDER], anthropicAdapter)
+  let anthropicAdapter: GoogleVertexAnthropicAdapter | undefined
+  if (tokenSource !== undefined) {
+    anthropicAdapter = new GoogleVertexAnthropicAdapter(anthropic, discoverClaude === undefined ? {} : { discover: discoverClaude })
+    ctx.llm.registerAdapter([PROVIDER], anthropicAdapter)
+  }
+
+  const geminiAdapter = new GoogleVertexGeminiAdapter(gemini, {
+    ...discoverGemini === undefined ? {} : { discover: discoverGemini },
+    resolveAttachments: () => ctx.get?.('attachments'),
+  })
   ctx.llm.registerAdapter([GEMINI_PROVIDER], geminiAdapter)
-  ctx.llm.registerAdapter([DEEPSEEK_PROVIDER], deepseekAdapter)
+
+  let deepseekAdapter: GoogleVertexDeepSeekAdapter | undefined
+  if (tokenSource !== undefined && deepseek !== undefined) {
+    deepseekAdapter = new GoogleVertexDeepSeekAdapter(deepseek, discoverDeepSeek === undefined ? {} : { discover: discoverDeepSeek })
+    ctx.llm.registerAdapter([DEEPSEEK_PROVIDER], deepseekAdapter)
+  }
 
   // A profile edit of `revalidatedAt` drops all cached catalogs.
   if (typeof ctx.on === 'function') {
     ctx.on('loader/volatile-update', () => {
-      anthropicAdapter.invalidateModels()
+      anthropicAdapter?.invalidateModels()
       geminiAdapter.invalidateModels()
-      deepseekAdapter.invalidateModels()
+      deepseekAdapter?.invalidateModels()
     })
   }
 
+  const projectLabel = gemini.project.length > 0 ? `project ${gemini.project}` : 'express mode'
+  const authLabel = [
+    resolved.apiKey !== undefined ? 'apiKey' : undefined,
+    resolved.serviceAccountFile !== undefined ? `credentials ${resolved.serviceAccountFile}` : undefined,
+  ].filter(Boolean).join(' + ')
+  const registered = tokenSource !== undefined
+    ? `"${PROVIDER}", "${GEMINI_PROVIDER}", and "${DEEPSEEK_PROVIDER}"`
+    : `"${GEMINI_PROVIDER}"`
+  const modelSummary = [
+    tokenSource !== undefined ? `Claude: ${anthropic.models.map(model => model.id).join(', ')}${pinnedClaude ? '' : ' (+ live discovery)'}` : undefined,
+    `Gemini: ${gemini.models.map(model => model.id).join(', ')}${discoverGemini !== undefined ? ' (+ live discovery)' : ''}`,
+    deepseek !== undefined ? `DeepSeek: ${deepseek.models.map(model => model.id).join(', ')}${pinnedDeepSeek ? '' : ' (+ live discovery)'}` : undefined,
+  ].filter(Boolean).join('. ')
+
   ctx.logger.info(
-    `google-vertex: providers "${PROVIDER}", "${GEMINI_PROVIDER}", and "${DEEPSEEK_PROVIDER}" registered for project ${anthropic.project}`
-    + ` (location ${anthropic.location}, credentials ${resolved.serviceAccountFile})`
-    + `. Claude: ${anthropic.models.map(model => model.id).join(', ')}${pinnedClaude ? '' : ' (+ live discovery)'}`
-    + `. Gemini: ${gemini.models.map(model => model.id).join(', ')}${pinnedGemini ? '' : ' (+ live discovery)'}`
-    + `. DeepSeek: ${deepseek.models.map(model => model.id).join(', ')}${pinnedDeepSeek ? '' : ' (+ live discovery)'}`,
+    `google-vertex: providers ${registered} registered for ${projectLabel}`
+    + ` (location ${gemini.location}, ${authLabel}). ${modelSummary}`,
   )
 }

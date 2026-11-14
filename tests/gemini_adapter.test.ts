@@ -273,7 +273,7 @@ test('model metadata comes from the catalog and reports the family capacities', 
 
   const listed = await adapter.listModels('google-vertex-gemini')
   assert.equal(listed.length, DEFAULT_GEMINI_MODELS.length)
-  assert.deepEqual(listed[0]?.inputModalities, ['text'])
+  assert.deepEqual(listed[0]?.inputModalities, ['text', 'image'])
 
   const resolved = await adapter.resolveModel('google-vertex-gemini', 'gemini-2.5-flash-lite')
   assert.equal(resolved.name, 'Gemini 2.5 Flash-Lite (Vertex)')
@@ -307,4 +307,120 @@ test('a refused HTTP response classifies RESOURCE_EXHAUSTED the way the in-band 
   assert.equal(finish.reason.failure.status, 429)
   assert.equal(finish.reason.failure.providerRetryAfterMs, 12_000)
   assert.match(finish.reason.failure.message, /Resource exhausted\. Please try again later\./)
+})
+
+test('streams Gemini text in Express API key mode with x-goog-api-key', async () => {
+  const requests: { url: string; init: RequestInit }[] = []
+  const fetch: FetchLike = (url, init) => {
+    requests.push({ url, init })
+    return Promise.resolve(streamResponse([
+      'data: {"candidates":[{"content":{"role":"model","parts":[{"text":"OK"}]},"finishReason":"STOP"}]}\n\n',
+    ]))
+  }
+  const expressConfig: GeminiAdapterConfig = {
+    apiKey: 'AQ.test-key',
+    project: '',
+    location: 'global',
+    models: DEFAULT_GEMINI_MODELS,
+    maxTokens: 65_535,
+    streamIdleTimeoutMs: DEFAULT_STREAM_IDLE_TIMEOUT_MS,
+  }
+  const adapter = new GoogleVertexGeminiAdapter(expressConfig, { fetch })
+  const chunks = await collect(adapter, OPTIONS)
+
+  assert.equal(chunks.at(-1)?.type, 'finish')
+  assert.equal(
+    requests[0]?.url,
+    'https://aiplatform.googleapis.com/v1/publishers/google/models/gemini-3.5-flash:streamGenerateContent?alt=sse',
+  )
+  const headers = requests[0]?.init.headers as Record<string, string>
+  assert.equal(headers['x-goog-api-key'], 'AQ.test-key')
+  assert.equal(headers['authorization'], undefined)
+})
+
+test('streams Gemini text in project-scoped API key mode when project is set', async () => {
+  const requests: { url: string; init: RequestInit }[] = []
+  const fetch: FetchLike = (url, init) => {
+    requests.push({ url, init })
+    return Promise.resolve(streamResponse([
+      'data: {"candidates":[{"content":{"role":"model","parts":[{"text":"OK"}]},"finishReason":"STOP"}]}\n\n',
+    ]))
+  }
+  const projectKeyConfig: GeminiAdapterConfig = {
+    apiKey: 'AQ.test-key',
+    project: '859541262458',
+    location: 'global',
+    models: DEFAULT_GEMINI_MODELS,
+    maxTokens: 65_535,
+    streamIdleTimeoutMs: DEFAULT_STREAM_IDLE_TIMEOUT_MS,
+  }
+  const adapter = new GoogleVertexGeminiAdapter(projectKeyConfig, { fetch })
+  await collect(adapter, OPTIONS)
+
+  assert.equal(
+    requests[0]?.url,
+    'https://aiplatform.googleapis.com/v1/projects/859541262458/locations/global/publishers/google/models/gemini-3.5-flash:streamGenerateContent?alt=sse',
+  )
+  const headers = requests[0]?.init.headers as Record<string, string>
+  assert.equal(headers['x-goog-api-key'], 'AQ.test-key')
+})
+
+test('advertises image modality and serializes image attachments as inlineData', async () => {
+  const requests: { url: string; init: RequestInit }[] = []
+  const fetch: FetchLike = (url, init) => {
+    requests.push({ url, init })
+    return Promise.resolve(streamResponse([
+      'data: {"candidates":[{"content":{"role":"model","parts":[{"text":"A red pixel"}]},"finishReason":"STOP"}]}\n\n',
+    ]))
+  }
+  const adapter = new GoogleVertexGeminiAdapter(
+    {
+      apiKey: 'AQ.test-key',
+      project: 'express',
+      location: 'global',
+      models: DEFAULT_GEMINI_MODELS,
+      maxTokens: 65_535,
+      streamIdleTimeoutMs: DEFAULT_STREAM_IDLE_TIMEOUT_MS,
+    },
+    {
+      fetch,
+      resolveAttachments: () => ({
+        readImageRequest: async () => ({
+          mediaType: 'image/png',
+          data: Uint8Array.from([1, 2, 3, 4]),
+        }),
+      }),
+    },
+  )
+
+  const listed = await adapter.listModels('google-vertex-gemini')
+  assert.deepEqual(listed[0]?.inputModalities, ['text', 'image'])
+  const resolved = await adapter.resolveModel('google-vertex-gemini', 'gemini-3.5-flash')
+  assert.deepEqual(resolved.inputModalities, ['text', 'image'])
+  assert.deepEqual(
+    adapter.imageRequestTarget('google-vertex-gemini', 'gemini-3.5-flash', { attachmentId: 'att1', width: 64, height: 48, bytes: 512 }),
+    { width: 64, height: 48, maxBytes: 512 },
+  )
+
+  await collect(adapter, {
+    ...OPTIONS,
+    messages: [
+      {
+        id: 'u1',
+        role: 'user',
+        content: [
+          { type: 'text', text: 'What is this?' },
+          { type: 'image', attachment: { attachmentId: 'att1', width: 64, height: 48, bytes: 512 } },
+        ],
+      },
+    ],
+  })
+
+  const sent = JSON.parse(String(requests[0]?.init.body)) as {
+    contents: { role: string; parts: Array<{ text?: string; inlineData?: { mimeType: string; data: string } }> }[]
+  }
+  assert.deepEqual(sent.contents[0]?.parts, [
+    { text: 'What is this?' },
+    { inlineData: { mimeType: 'image/png', data: 'AQIDBA==' } },
+  ])
 })

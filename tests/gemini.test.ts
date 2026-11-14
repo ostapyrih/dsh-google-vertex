@@ -162,6 +162,53 @@ test('the Gemini body maps oneOf to the nullable/anyOf shape the Schema message 
   assert.equal(JSON.stringify(body).includes('oneOf'), false)
 })
 
+test('the Gemini body rewrites const to the one-value enum the Schema message carries', () => {
+  // `task_board_update`'s `permission` parameter is
+  // `oneOf: [{ type: 'string', enum: [...] }, { type: 'string', const: '' }]`,
+  // so the oneOf rewrite handed Vertex a `const` member its `Schema` message has
+  // no field for: `Invalid JSON payload received. Unknown name "const" at
+  // 'tools[0].function_declarations[45].parameters.properties[6].value
+  // .any_of[1]'`. JSON Schema `const` is the one-value `enum` — but the
+  // endpoint refuses an empty enum member too (`any_of[1].enum[0]: cannot be
+  // empty`), so an empty-string literal is dropped like a non-string one.
+  const body = buildGeminiRequest({
+    model: MODEL,
+    tools: [{
+      name: 'task_board_update',
+      description: 'edit',
+      parameters: {
+        type: 'object',
+        properties: {
+          permission: {
+            oneOf: [
+              { type: 'string', enum: ['read-only', 'workspace-write', 'danger-full-access'] },
+              { type: 'string', const: '' },
+            ],
+          },
+          mode: { oneOf: [{ type: 'string', const: 'liangshen' }, { type: 'null' }] },
+          retries: { oneOf: [{ type: 'integer' }, { type: 'integer', const: 3 }] },
+        },
+      },
+    }],
+    messages: [{ id: '1', role: 'user', content: [{ type: 'text', text: 'hi' }] }],
+  }, CONFIG)
+
+  assert.deepEqual(body.tools?.[0]?.functionDeclarations[0]?.parameters, {
+    type: 'object',
+    properties: {
+      permission: {
+        anyOf: [
+          { type: 'string', enum: ['read-only', 'workspace-write', 'danger-full-access'] },
+          { type: 'string' },
+        ],
+      },
+      mode: { type: 'string', enum: ['liangshen'], nullable: true },
+      retries: { anyOf: [{ type: 'integer' }, { type: 'integer' }] },
+    },
+  })
+  assert.equal(JSON.stringify(body).includes('const'), false)
+})
+
 test('a tool round trip carries the function name and Vertex thought signature', () => {
   const assistant: Message = {
     id: '2',
@@ -199,9 +246,13 @@ test('readGeminiReplay refuses a foreign, cross-model, or misaligned envelope', 
   assert.equal(readGeminiReplay(message, 'gemini-2.5-pro'), undefined)
   assert.equal(readGeminiReplay({ ...message, source: { kind: 'plugin' } }, MODEL), undefined)
   assert.equal(readGeminiReplay({ ...message, source: { kind: 'model', replayState: { response: { kind: 'other' } } } }, MODEL), undefined)
-  assert.equal(readGeminiReplay({
+  assert.deepEqual(readGeminiReplay({
     ...message,
     source: { kind: 'model', replayState: geminiReplayState(MODEL, []) },
+  }, MODEL), [{ type: 'tool-call' }])
+  assert.equal(readGeminiReplay({
+    ...message,
+    source: { kind: 'model', replayState: { response: { kind: 'google-vertex-gemini', version: 1, model: MODEL }, blocks: 'bad' } },
   }, MODEL), undefined)
 })
 
@@ -325,8 +376,9 @@ test('a thought-only output cap preserves its length stop and billed usage', () 
   })
   assert.equal(translator.sawFinish, true)
   assert.deepEqual(translator.finish(), [
+    { type: 'block-end', index: 0, block: { type: 'reasoning', text: 'thinking' } },
     { type: 'usage', usage: { inputTokens: 120, outputTokens: 65535, reasoningTokens: 65535, totalTokens: 65655 } },
-    { type: 'finish', reason: { kind: 'max-tokens' }, replayState: geminiReplayState(MODEL, []) },
+    { type: 'finish', reason: { kind: 'max-tokens' }, replayState: geminiReplayState(MODEL, [{ type: 'reasoning' }]) },
   ])
 })
 
@@ -375,7 +427,7 @@ test('usage is emitted only when the provider reported a counter', () => {
   ])
 })
 
-test('thought summaries are dropped and a contentless response is an empty-response failure', () => {
+test('thought summaries stream as reasoning blocks with stop finish', () => {
   const translator = new GeminiStreamTranslator(MODEL)
   const emitted = translator.handle({
     candidates: [{
@@ -384,15 +436,17 @@ test('thought summaries are dropped and a contentless response is an empty-respo
     }],
     usageMetadata: { promptTokenCount: 2, candidatesTokenCount: 0, thoughtsTokenCount: 3, totalTokenCount: 5 },
   })
-  assert.deepEqual(emitted, [])
-  assert.deepEqual(translator.finish(), [{ type: 'usage', usage: { inputTokens: 2, outputTokens: 3, reasoningTokens: 3, totalTokens: 5 } }, {
-    type: 'finish',
-    reason: {
-      kind: 'error',
-      failure: {
-        message: 'google-vertex: the model completed the response with no content',
-        code: 'EMPTY_RESPONSE',
-      },
+  assert.deepEqual(emitted, [
+    { type: 'block-start', index: 0, blockType: 'reasoning' },
+    { type: 'reasoning-delta', index: 0, text: 'thinking hard' },
+  ])
+  assert.deepEqual(translator.finish(), [
+    { type: 'block-end', index: 0, block: { type: 'reasoning', text: 'thinking hard' } },
+    { type: 'usage', usage: { inputTokens: 2, outputTokens: 3, reasoningTokens: 3, totalTokens: 5 } },
+    {
+      type: 'finish',
+      reason: { kind: 'stop' },
+      replayState: geminiReplayState(MODEL, [{ type: 'reasoning' }]),
     },
-  }])
+  ])
 })

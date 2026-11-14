@@ -17,6 +17,28 @@
  */
 /** Disposer returned by every host registration. */
 type Disposable = () => void;
+/** Minimal image attachment metadata carried on an image block. */
+export interface ImageAttachmentRef {
+    readonly attachmentId: string;
+    readonly width: number;
+    readonly height: number;
+    readonly bytes: number;
+}
+/** Resolved image payload returned by the host attachment service. */
+export interface RequestImageAttachment {
+    readonly mediaType: string;
+    readonly data: Uint8Array;
+}
+/** Target dimensions and byte budget passed to `readImageRequest`. */
+export interface ImageRequestTarget {
+    readonly width: number;
+    readonly height: number;
+    readonly maxBytes: number;
+}
+/** Narrowed host attachment store surface used for reading request images. */
+export interface AttachmentStoreLike {
+    readImageRequest(ref: ImageAttachmentRef, target: ImageRequestTarget, signal?: AbortSignal): Promise<RequestImageAttachment | undefined>;
+}
 /** Content block the harness may hand us in request history. */
 export type ContentBlock = {
     readonly type: 'text';
@@ -24,6 +46,10 @@ export type ContentBlock = {
 } | {
     readonly type: 'reasoning';
     readonly text: string;
+} | {
+    readonly type: 'image';
+    readonly attachment: ImageAttachmentRef;
+    readonly offloaded?: true;
 } | {
     readonly type: 'tool-call';
     readonly id: string;
@@ -72,6 +98,8 @@ export interface GenerateOptions {
     readonly temperature?: number;
     readonly maxTokens?: number;
     readonly stop?: readonly string[];
+    readonly reasoningEffort?: string;
+    readonly reasoning?: string;
     readonly signal?: AbortSignal;
 }
 /** Token accounting for one model call. */
@@ -148,6 +176,16 @@ export interface LlmProviderInfo {
     readonly id: string;
     readonly name: string;
 }
+/** One selectable reasoning effort level for a model. */
+export interface ReasoningEffortOption {
+    readonly id: string;
+    readonly name: string;
+}
+/** Reasoning capability metadata advertised by an exact model resolution. */
+export interface LlmModelReasoning {
+    readonly efforts: readonly ReasoningEffortOption[];
+    readonly defaultEffort?: string;
+}
 /** One adapter-advertised model. */
 export interface LlmModelInfo {
     readonly provider: string;
@@ -162,6 +200,7 @@ export interface LlmResolvedModelInfo extends LlmModelInfo {
         readonly contextWindow: number;
     };
     readonly defaultMaxTokens?: number;
+    readonly reasoning?: LlmModelReasoning;
 }
 /** What `prepareCall` binds: exact model metadata plus one-generation dispatch. */
 export interface PreparedAdapterCall {
@@ -181,6 +220,7 @@ export interface LlmAdapterLike {
     providerInfo(provider: string): LlmProviderInfo;
     providerRetryPolicy(provider: string): unknown;
     imageRequestPricing(provider: string, model: string): unknown;
+    imageRequestTarget?(provider: string, model: string, image: ImageAttachmentRef): ImageRequestTarget;
     listModels(provider: string): Promise<readonly LlmModelInfo[]>;
     resolveModel(provider: string, model: string, signal?: AbortSignal): Promise<LlmResolvedModelInfo>;
     prepareCall(provider: string, model: string, signal?: AbortSignal): Promise<PreparedAdapterCall>;
@@ -202,5 +242,7 @@ export interface HostContext {
      * case no cached catalog is dropped.
      */
     on?(event: 'loader/volatile-update', listener: () => void): unknown;
+    /** Optional service lookup used to resolve the attachment store at request time. */
+    get?(name: 'attachments'): AttachmentStoreLike | undefined;
 }
 export {};

@@ -9,7 +9,7 @@
  *
  * @module dsh-google-vertex/gemini
  */
-import type { FinishReason, GenerateOptions, Message, StreamChunk, TokenUsage } from './host.ts';
+import type { AttachmentStoreLike, FinishReason, GenerateOptions, Message, RequestImageAttachment, StreamChunk, TokenUsage } from './host.ts';
 import type { VertexWireConfig } from './wire.ts';
 import type { VertexModel } from './adapter.ts';
 /** Harness code reported when the provider refused on safety grounds. */
@@ -34,27 +34,35 @@ export declare const DEFAULT_GEMINI_MAX_TOKENS = 65535;
 export declare const DEFAULT_GEMINI_MODELS: readonly VertexModel[];
 /**
  * The streaming publisher path for one Gemini model.
- * @param project - Google Cloud project id.
+ * @param project - Google Cloud project id (may be empty in Express API-key mode).
  * @param location - region, or `global`.
  * @param model - publisher model id, e.g. `gemini-3.5-flash`.
+ * @param apiKey - optional Vertex Express API key; when set without a project, uses the Express publisher path.
  * @returns the absolute request URL, with the SSE response encoding.
  */
-export declare function geminiEndpointFor(project: string, location: string, model: string): string;
+export declare function geminiEndpointFor(project: string, location: string, model: string, apiKey?: string): string;
 /** One function call the model requested. */
 interface GeminiFunctionCall {
     name: string;
     args?: Record<string, unknown>;
     id?: string;
 }
+/** One inline media payload. */
+interface GeminiInlineData {
+    mimeType: string;
+    data: string;
+}
 /** One function result being sent back. */
 interface GeminiFunctionResponse {
     name: string;
     id?: string;
     response: Record<string, unknown>;
+    parts?: GeminiPart[];
 }
 /** One content part on the wire. */
 interface GeminiPart {
     text?: string;
+    inlineData?: GeminiInlineData;
     thought?: boolean;
     thoughtSignature?: string;
     functionCall?: GeminiFunctionCall;
@@ -86,6 +94,10 @@ export interface GeminiRequestBody {
         temperature?: number;
         maxOutputTokens?: number;
         stopSequences?: string[];
+        thinkingConfig?: {
+            thinkingLevel: string;
+            includeThoughts: boolean;
+        };
     };
 }
 /**
@@ -93,11 +105,11 @@ export interface GeminiRequestBody {
  *
  * Vertex requires the thought signature of a function call to be echoed when the
  * call is replayed with its result; dropping it is a 400
- * ("Function call is missing a thought_signature"). Text parts can carry one
- * too, so the entry is kept for both block kinds.
+ * ("Function call is missing a thought_signature"). Text and reasoning parts
+ * can carry one too, so the entry is kept for all three block kinds.
  */
 interface GeminiReplayBlock {
-    readonly type: 'text' | 'tool-call';
+    readonly type: 'text' | 'reasoning' | 'tool-call';
     readonly thoughtSignature?: string;
 }
 /** The envelope the harness stores on an assistant message and hands back. */
@@ -128,6 +140,8 @@ export declare function geminiReplayState(model: string, blocks: readonly Gemini
  * @returns index-aligned metadata, or undefined when unusable.
  */
 export declare function readGeminiReplay(message: Message, model: string): readonly GeminiReplayBlock[] | undefined;
+/** Resolve all non-offloaded image attachments referenced in the request. */
+export declare function prepareGeminiRequest(options: GenerateOptions, config: VertexWireConfig, attachments?: AttachmentStoreLike): Promise<GeminiRequestBody>;
 /**
  * Build the request body for one model call.
  *
@@ -139,9 +153,10 @@ export declare function readGeminiReplay(message: Message, model: string): reado
  * what keeps 2.5 Pro working, since that model refuses a zero thinking budget.
  * @param options - the harness request.
  * @param config - project, location, and default output cap.
+ * @param requestImages - optional resolved image attachments keyed by attachmentId.
  * @returns the wire body.
  */
-export declare function buildGeminiRequest(options: GenerateOptions, config: VertexWireConfig): GeminiRequestBody;
+export declare function buildGeminiRequest(options: GenerateOptions, config: VertexWireConfig, requestImages?: ReadonlyMap<string, RequestImageAttachment>): GeminiRequestBody;
 /** Raw usage counters as Vertex reports them. */
 interface GeminiUsageMetadata {
     promptTokenCount?: number;
@@ -176,7 +191,8 @@ export declare function mapGeminiFinishReason(reason: string | undefined, sawToo
  * Translate Gemini's `streamGenerateContent` chunks into harness chunks.
  *
  * Gemini streams whole parts rather than deltas, so the shape of this translator
- * is: text parts append to one open text block, a function call closes that block
+ * is: reasoning parts open a reasoning block, text parts close any open reasoning
+ * block and append to one open text block, a function call closes any open block
  * and is itself closed immediately (arguments arrive complete), and the terminal
  * chunk carries usage plus the stop reason.
  */

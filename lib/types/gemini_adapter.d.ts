@@ -16,13 +16,18 @@ import { VertexPublisherAdapter } from './adapter.ts';
 import type { TokenProvider, VertexModel } from './adapter.ts';
 import type { FetchLike, ServiceAccount } from './auth.ts';
 import type { VertexWireConfig } from './wire.ts';
-import type { GenerateOptions, StreamChunk } from './host.ts';
+import type { AttachmentStoreLike, GenerateOptions, LlmResolvedModelInfo, ReasoningEffortOption, StreamChunk } from './host.ts';
+/** Selectable reasoning efforts exposed for Gemini models. */
+export declare const GEMINI_REASONING_EFFORTS: readonly ReasoningEffortOption[];
 /** Resolved adapter configuration for the Gemini route. */
 export interface GeminiAdapterConfig extends VertexWireConfig {
-    readonly serviceAccount: ServiceAccount;
+    readonly serviceAccount?: ServiceAccount;
+    readonly apiKey?: string;
     readonly models: readonly VertexModel[];
     /** Bound on the interval between two stream reads, in milliseconds. */
     readonly streamIdleTimeoutMs: number;
+    /** Default reasoning effort when a caller omits one. */
+    readonly reasoningEffort?: string;
 }
 /**
  * Duck-typed adapter over Vertex's Gemini publisher endpoint.
@@ -39,6 +44,7 @@ export declare class GoogleVertexGeminiAdapter extends VertexPublisherAdapter<Ge
         fetch?: FetchLike;
         tokens?: TokenProvider;
         discover?: () => Promise<readonly VertexModel[]>;
+        resolveAttachments?: () => AttachmentStoreLike | undefined;
     });
     /**
      * Stream one completion through `:streamGenerateContent?alt=sse`.
@@ -50,5 +56,6 @@ export declare class GoogleVertexGeminiAdapter extends VertexPublisherAdapter<Ge
      * the turn. The shared pump owns the watchdog, the token mint, and the SSE
      * loop; this route's finish is built at the end of the body.
      */
+    resolveModel(provider: string, model: string, signal?: AbortSignal): Promise<LlmResolvedModelInfo>;
     stream(options: GenerateOptions): AsyncIterable<StreamChunk>;
 }

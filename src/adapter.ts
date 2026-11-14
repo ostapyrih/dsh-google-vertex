@@ -29,7 +29,10 @@ import { ServiceAccountTokens, VertexAuthError } from './auth.ts'
 import type { FetchLike, ServiceAccount } from './auth.ts'
 import { ModelCache } from './discovery.ts'
 import type {
+  AttachmentStoreLike,
   GenerateOptions,
+  ImageAttachmentRef,
+  ImageRequestTarget,
   LlmAdapterLike,
   LlmFailure,
   LlmModelInfo,
@@ -70,7 +73,8 @@ export interface TokenProvider {
  * catalog entries, which is why `models` is typed loosely here.
  */
 interface VertexAdapterConfig {
-  readonly serviceAccount: ServiceAccount
+  readonly serviceAccount?: ServiceAccount
+  readonly apiKey?: string
   readonly project: string
   readonly location: string
   readonly models: readonly VertexModel[]
@@ -98,6 +102,8 @@ interface AdapterMetadata<C extends VertexAdapterConfig> {
   readonly capacity: { contextWindow: number; defaultMaxTokens: number }
   /** Model description reported for this route, project and region included. */
   readonly describe: (config: C) => string
+  /** Accepted input modalities for this route; defaults to text-only. */
+  readonly inputModalities?: readonly string[]
 }
 
 /** Terminal error finish carrying one failure. */
@@ -169,7 +175,7 @@ interface StreamPumpOptions {
   /** The request URL for the chosen model. */
   readonly endpoint: (model: string, config: VertexAdapterConfig) => string
   /** The request body for the chosen model. */
-  readonly body: (options: GenerateOptions, config: VertexAdapterConfig) => unknown
+  readonly body: (options: GenerateOptions, config: VertexAdapterConfig) => unknown | Promise<unknown>
   /** Failure named when the body ended without the provider's finish. */
   readonly truncatedMessage: (model: string) => string
 }
@@ -204,7 +210,7 @@ export async function* streamVertex(
   config: VertexAdapterConfig,
   options: GenerateOptions,
   fetch: FetchLike,
-  tokens: TokenProvider,
+  tokens: TokenProvider | undefined,
   makeTranslator: (model: string) => StreamTranslatorLike,
   pump: StreamPumpOptions,
 ): AsyncGenerator<StreamChunk> {
@@ -254,39 +260,48 @@ export async function* streamVertex(
     idleTimer = undefined
   }
 
-  let token: string
-  armIdle()
-  try {
-    // The token mint is a network call too: an unbounded one stalls the same
-    // way a stalled body does.
-    token = await tokens.get(signal)
-  } catch (error) {
-    if (idleTimedOut) {
-      yield errorFinish(idleTimeoutFailure(config.streamIdleTimeoutMs))
+  let token: string | undefined
+  if (config.apiKey === undefined) {
+    if (tokens === undefined) {
+      yield errorFinish(credentialFailure(new Error('no credentials configured')))
       return
     }
-    if (options.signal?.aborted === true) {
-      yield transportFinish(options, error)
+    armIdle()
+    try {
+      // The token mint is a network call too: an unbounded one stalls the same
+      // way a stalled body does.
+      token = await tokens.get(signal)
+    } catch (error) {
+      if (idleTimedOut) {
+        yield errorFinish(idleTimeoutFailure(config.streamIdleTimeoutMs))
+        return
+      }
+      if (options.signal?.aborted === true) {
+        yield transportFinish(options, error)
+        return
+      }
+      yield errorFinish(credentialFailure(error))
       return
+    } finally {
+      disarmIdle()
     }
-    yield errorFinish(credentialFailure(error))
-    return
-  } finally {
-    disarmIdle()
   }
 
   let response: Response
   armIdle()
   try {
+    const authHeaders: Record<string, string> = config.apiKey !== undefined
+      ? { 'x-goog-api-key': config.apiKey }
+      : { 'authorization': `Bearer ${token}` }
     response = await fetch(pump.endpoint(model, config), {
       method: 'POST',
       headers: {
         'content-type': 'application/json',
         'accept': 'text/event-stream',
         ...attributionHeaders(),
-        'authorization': `Bearer ${token}`,
+        ...authHeaders,
       },
-      body: JSON.stringify(pump.body(options, config)),
+      body: JSON.stringify(await pump.body(options, config)),
       signal,
     })
   } catch (error) {
@@ -301,7 +316,7 @@ export async function* streamVertex(
   }
 
   if (!response.ok) {
-    if (response.status === 401) tokens.invalidate?.(token)
+    if (response.status === 401 && token !== undefined) tokens?.invalidate?.(token)
     let body: string
     armIdle()
     try {
@@ -393,22 +408,32 @@ export abstract class VertexPublisherAdapter<C extends VertexAdapterConfig> impl
   /** The transport this adapter was built with. */
   protected readonly fetch: FetchLike
   /** The token source this adapter asks before each request. */
-  protected readonly tokens: TokenProvider
+  protected readonly tokens: TokenProvider | undefined
+  /** Optional attachment store resolver for multimodal routes. */
+  protected readonly resolveAttachments: (() => AttachmentStoreLike | undefined) | undefined
 
   /**
    * @param metadata - display name, capacities, and description text.
    * @param config - the resolved configuration this adapter serves.
-   * @param options - transport, token-source, and discovery overrides.
+   * @param options - transport, token-source, discovery, and attachment overrides.
    */
   constructor(
     metadata: AdapterMetadata<C>,
     config: C,
-    options: { fetch?: FetchLike; tokens?: TokenProvider; discover?: () => Promise<readonly VertexModel[]> } = {},
+    options: {
+      fetch?: FetchLike
+      tokens?: TokenProvider
+      discover?: () => Promise<readonly VertexModel[]>
+      resolveAttachments?: () => AttachmentStoreLike | undefined
+    } = {},
   ) {
     this.#metadata = metadata
     this.config = config
     this.fetch = options.fetch ?? ((input, init) => globalThis.fetch(input, init))
-    this.tokens = options.tokens ?? new ServiceAccountTokens(config.serviceAccount, { fetch: this.fetch })
+    this.tokens = options.tokens ?? (config.serviceAccount
+      ? new ServiceAccountTokens(config.serviceAccount, { fetch: this.fetch })
+      : undefined)
+    this.resolveAttachments = options.resolveAttachments
     this.#discover = options.discover
     this.#modelCache = new ModelCache(config.models)
   }
@@ -434,6 +459,11 @@ export abstract class VertexPublisherAdapter<C extends VertexAdapterConfig> impl
   /** No route charges visual tokens: these adapters are text-only. */
   imageRequestPricing(_provider: string, _model: string): undefined {
     return undefined
+  }
+
+  /** Preserve normalized image dimensions and byte budget for image-capable routes. */
+  imageRequestTarget(_provider: string, _model: string, image: ImageAttachmentRef): ImageRequestTarget {
+    return { width: image.width, height: image.height, maxBytes: image.bytes }
   }
 
   /**
@@ -486,7 +516,7 @@ export abstract class VertexPublisherAdapter<C extends VertexAdapterConfig> impl
       id: model,
       name,
       description: this.#metadata.describe(this.config),
-      inputModalities: ['text'],
+      inputModalities: this.#metadata.inputModalities ?? ['text'],
     }
   }
 }

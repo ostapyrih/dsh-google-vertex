@@ -24,7 +24,7 @@
  * @module dsh-google-vertex/adapter
  */
 import type { FetchLike, ServiceAccount } from './auth.ts';
-import type { GenerateOptions, LlmAdapterLike, LlmModelInfo, LlmProviderInfo, LlmResolvedModelInfo, PreparedAdapterCall, StreamChunk } from './host.ts';
+import type { AttachmentStoreLike, GenerateOptions, ImageAttachmentRef, ImageRequestTarget, LlmAdapterLike, LlmModelInfo, LlmProviderInfo, LlmResolvedModelInfo, PreparedAdapterCall, StreamChunk } from './host.ts';
 /** One advertised model. */
 export interface VertexModel {
     readonly id: string;
@@ -46,7 +46,8 @@ export interface TokenProvider {
  * catalog entries, which is why `models` is typed loosely here.
  */
 interface VertexAdapterConfig {
-    readonly serviceAccount: ServiceAccount;
+    readonly serviceAccount?: ServiceAccount;
+    readonly apiKey?: string;
     readonly project: string;
     readonly location: string;
     readonly models: readonly VertexModel[];
@@ -75,6 +76,8 @@ interface AdapterMetadata<C extends VertexAdapterConfig> {
     };
     /** Model description reported for this route, project and region included. */
     readonly describe: (config: C) => string;
+    /** Accepted input modalities for this route; defaults to text-only. */
+    readonly inputModalities?: readonly string[];
 }
 /**
  * One provider translator, as the shared pump reads it.
@@ -100,7 +103,7 @@ interface StreamPumpOptions {
     /** The request URL for the chosen model. */
     readonly endpoint: (model: string, config: VertexAdapterConfig) => string;
     /** The request body for the chosen model. */
-    readonly body: (options: GenerateOptions, config: VertexAdapterConfig) => unknown;
+    readonly body: (options: GenerateOptions, config: VertexAdapterConfig) => unknown | Promise<unknown>;
     /** Failure named when the body ended without the provider's finish. */
     readonly truncatedMessage: (model: string) => string;
 }
@@ -130,7 +133,7 @@ interface StreamPumpOptions {
  * @param pump - this route's endpoint, body, and terminal wording.
  * @yields every chunk the provider's stream completes.
  */
-export declare function streamVertex(config: VertexAdapterConfig, options: GenerateOptions, fetch: FetchLike, tokens: TokenProvider, makeTranslator: (model: string) => StreamTranslatorLike, pump: StreamPumpOptions): AsyncGenerator<StreamChunk>;
+export declare function streamVertex(config: VertexAdapterConfig, options: GenerateOptions, fetch: FetchLike, tokens: TokenProvider | undefined, makeTranslator: (model: string) => StreamTranslatorLike, pump: StreamPumpOptions): AsyncGenerator<StreamChunk>;
 /**
  * Duck-typed base for both Vertex publisher adapters.
  *
@@ -147,16 +150,19 @@ export declare abstract class VertexPublisherAdapter<C extends VertexAdapterConf
     /** The transport this adapter was built with. */
     protected readonly fetch: FetchLike;
     /** The token source this adapter asks before each request. */
-    protected readonly tokens: TokenProvider;
+    protected readonly tokens: TokenProvider | undefined;
+    /** Optional attachment store resolver for multimodal routes. */
+    protected readonly resolveAttachments: (() => AttachmentStoreLike | undefined) | undefined;
     /**
      * @param metadata - display name, capacities, and description text.
      * @param config - the resolved configuration this adapter serves.
-     * @param options - transport, token-source, and discovery overrides.
+     * @param options - transport, token-source, discovery, and attachment overrides.
      */
     constructor(metadata: AdapterMetadata<C>, config: C, options?: {
         fetch?: FetchLike;
         tokens?: TokenProvider;
         discover?: () => Promise<readonly VertexModel[]>;
+        resolveAttachments?: () => AttachmentStoreLike | undefined;
     });
     /** {@inheritDoc LlmAdapterLike.providerInfo} */
     providerInfo(provider: string): LlmProviderInfo;
@@ -172,6 +178,8 @@ export declare abstract class VertexPublisherAdapter<C extends VertexAdapterConf
     providerRetryPolicy(_provider: string): undefined;
     /** No route charges visual tokens: these adapters are text-only. */
     imageRequestPricing(_provider: string, _model: string): undefined;
+    /** Preserve normalized image dimensions and byte budget for image-capable routes. */
+    imageRequestTarget(_provider: string, _model: string, image: ImageAttachmentRef): ImageRequestTarget;
     /**
      * The current model catalog, fetched from the provider when discovery is
      * configured, falling back to the static catalog on failure.

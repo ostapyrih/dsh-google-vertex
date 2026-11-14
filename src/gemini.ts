@@ -11,10 +11,13 @@
  */
 
 import type {
+  AttachmentStoreLike,
   ContentBlock,
   FinishReason,
   GenerateOptions,
+  ImageAttachmentRef,
   Message,
+  RequestImageAttachment,
   StreamChunk,
   TokenUsage,
 } from './host.ts'
@@ -59,13 +62,17 @@ export const DEFAULT_GEMINI_MODELS: readonly VertexModel[] = [
 
 /**
  * The streaming publisher path for one Gemini model.
- * @param project - Google Cloud project id.
+ * @param project - Google Cloud project id (may be empty in Express API-key mode).
  * @param location - region, or `global`.
  * @param model - publisher model id, e.g. `gemini-3.5-flash`.
+ * @param apiKey - optional Vertex Express API key; when set without a project, uses the Express publisher path.
  * @returns the absolute request URL, with the SSE response encoding.
  */
-export function geminiEndpointFor(project: string, location: string, model: string): string {
+export function geminiEndpointFor(project: string, location: string, model: string, apiKey?: string): string {
   const origin = endpointOrigin(location)
+  if (apiKey !== undefined && (project.length === 0 || project === 'express')) {
+    return `${origin}/${API_VERSION}/publishers/google/models/${encodeURIComponent(model)}:streamGenerateContent?alt=sse`
+  }
   const path = `/${API_VERSION}/projects/${encodeURIComponent(project)}/locations/${encodeURIComponent(location)}`
     + `/publishers/google/models/${encodeURIComponent(model)}:streamGenerateContent?alt=sse`
   return `${origin}${path}`
@@ -78,16 +85,24 @@ interface GeminiFunctionCall {
   id?: string
 }
 
+/** One inline media payload. */
+interface GeminiInlineData {
+  mimeType: string
+  data: string
+}
+
 /** One function result being sent back. */
 interface GeminiFunctionResponse {
   name: string
   id?: string
   response: Record<string, unknown>
+  parts?: GeminiPart[]
 }
 
 /** One content part on the wire. */
 interface GeminiPart {
   text?: string
+  inlineData?: GeminiInlineData
   thought?: boolean
   thoughtSignature?: string
   functionCall?: GeminiFunctionCall
@@ -116,6 +131,7 @@ export interface GeminiRequestBody {
     temperature?: number
     maxOutputTokens?: number
     stopSequences?: string[]
+    thinkingConfig?: { thinkingLevel: string; includeThoughts: boolean }
   }
 }
 
@@ -124,11 +140,11 @@ export interface GeminiRequestBody {
  *
  * Vertex requires the thought signature of a function call to be echoed when the
  * call is replayed with its result; dropping it is a 400
- * ("Function call is missing a thought_signature"). Text parts can carry one
- * too, so the entry is kept for both block kinds.
+ * ("Function call is missing a thought_signature"). Text and reasoning parts
+ * can carry one too, so the entry is kept for all three block kinds.
  */
 interface GeminiReplayBlock {
-  readonly type: 'text' | 'tool-call'
+  readonly type: 'text' | 'reasoning' | 'tool-call'
   readonly thoughtSignature?: string
 }
 
@@ -159,12 +175,18 @@ function asObject(value: unknown): Record<string, unknown> | undefined {
  *
  * Vertex accepts only `anyOf`, `default`, `description`, `enum`, `example`,
  * `format`, `items`, the min/max bounds, `nullable`, `pattern`, `properties`,
- * `propertyOrdering`, `required`, `title`, and `type`. Two members the harness's
- * value-schema subset emits are not among them, and the endpoint refuses the
- * whole request when one arrives: `Invalid JSON payload received. Unknown name
- * "additionalProperties" at 'tools[0].function_declarations[0].parameters'`:
+ * `propertyOrdering`, `required`, `title`, and `type`. Three members the
+ * harness's value-schema subset emits are not among them, and the endpoint
+ * refuses the whole request when one arrives: `Invalid JSON payload received.
+ * Unknown name "additionalProperties" at 'tools[0].function_declarations[0]
+ * .parameters'`:
  *
  * - `additionalProperties` (the harness requires it on every object) is dropped.
+ * - `const` (a literal parameter value, e.g. the empty string
+ *   `task_board_update` accepts for `permission`) is rewritten to the one-value
+ *   `enum` JSON Schema defines it to be. An empty-string or non-string literal
+ *   has no `Schema.enum` slot (`repeated string`, and an empty member is
+ *   refused) and is dropped.
  * - `oneOf` has no `Schema` member; `anyOf` does. The backend also has no null
  *   type, so a `null` branch becomes `nullable: true` and the remaining branch
  *   is inlined (one branch left) or kept as `anyOf` (several). That is the same
@@ -180,6 +202,19 @@ function geminiSchema(schema: Record<string, unknown>): Record<string, unknown> 
   const copy: Record<string, unknown> = {}
   for (const [key, value] of Object.entries(schema)) {
     if (key === 'additionalProperties') continue
+    if (key === 'const') {
+      // Vertex's `Schema` message has no `const` member either: the endpoint
+      // refuses it ("Invalid JSON payload received. Unknown name \"const\" at
+      // 'tools[0].function_declarations[45].parameters.properties[6].value
+      // .any_of[1]'"). JSON Schema `const` is the one-value `enum`, which the
+      // message does carry — but an empty-string member is refused too
+      // (`...any_of[1].enum[0]: cannot be empty`), and `Schema.enum` is
+      // `repeated string`, so no other JSON type fits. A `const` that cannot be
+      // carried is dropped; that only loosens the provider-side hint, since the
+      // harness validates the model's arguments against the original schema.
+      if (typeof value === 'string' && value !== '') copy['enum'] ??= [value]
+      continue
+    }
     if (key === 'properties') {
       const properties = asObject(value)
       if (properties !== undefined) {
@@ -258,18 +293,41 @@ export function readGeminiReplay(message: Message, model: string): readonly Gemi
   if (response?.['kind'] !== 'google-vertex-gemini' || response['version'] !== 1) return undefined
   if (response['model'] !== model) return undefined
   const raw = envelope?.['blocks']
-  if (!Array.isArray(raw) || raw.length !== message.content.length) return undefined
-  const blocks: GeminiReplayBlock[] = []
-  for (const [index, value] of raw.entries()) {
+  if (!Array.isArray(raw)) return undefined
+  const entries: GeminiReplayBlock[] = []
+  for (const value of raw) {
     const block = asObject(value)
     const type = block?.['type']
-    if (type !== message.content[index]?.type) return undefined
-    if (type !== 'text' && type !== 'tool-call') return undefined
+    if (type !== 'text' && type !== 'reasoning' && type !== 'tool-call') return undefined
     const signature = block?.['thoughtSignature']
     if (signature !== undefined && typeof signature !== 'string') return undefined
-    blocks.push({ type, ...signature === undefined ? {} : { thoughtSignature: signature } })
+    entries.push({ type, ...signature === undefined ? {} : { thoughtSignature: signature } })
   }
-  return blocks
+  if (entries.length === message.content.length && entries.every((entry, index) => entry.type === message.content[index]?.type)) {
+    return entries
+  }
+  const queues = new Map<string, GeminiReplayBlock[]>()
+  for (const entry of entries) {
+    let list = queues.get(entry.type)
+    if (list === undefined) {
+      list = []
+      queues.set(entry.type, list)
+    }
+    list.push(entry)
+  }
+  return message.content.map(block => queues.get(block.type)?.shift() ?? { type: block.type as GeminiReplayBlock['type'] })
+}
+
+/** True for Gemini 3+ / 4 models that reject unsigned replayed function calls. */
+function requiresThoughtSignature(model: string): boolean {
+  return /^gemini-(?:[3-9]|\d{2,})(?:[.-]|$)/i.test(model)
+}
+
+const THINKING_LEVELS: Record<string, string> = {
+  low: 'LOW',
+  medium: 'MEDIUM',
+  high: 'HIGH',
+  max: 'HIGH',
 }
 
 /** Every tool-call id in this request, mapped to the tool's name. */
@@ -284,9 +342,10 @@ function toolNames(messages: readonly Message[]): Map<string, string> {
 }
 
 /** Project one assistant message onto Gemini parts, signatures included. */
-function assistantParts(message: Message, model: string): GeminiPart[] {
+function assistantParts(message: Message, model: string, degradedCallIds: Set<string>): GeminiPart[] {
   const replay = readGeminiReplay(message, model)
   const parts: GeminiPart[] = []
+  const mustSign = requiresThoughtSignature(model)
   message.content.forEach((block, index) => {
     const signature = replay?.[index]?.thoughtSignature
     if (block.type === 'text') {
@@ -296,9 +355,15 @@ function assistantParts(message: Message, model: string): GeminiPart[] {
       return
     }
     if (block.type === 'tool-call') {
+      const args = toolInput(String(block.arguments))
+      if (signature === undefined && mustSign) {
+        if (typeof block.id === 'string' && block.id.length > 0) degradedCallIds.add(block.id)
+        parts.push({ text: `[Historical tool call: ${String(block.name)}(${JSON.stringify(args)})]` })
+        return
+      }
       const call: GeminiFunctionCall = {
         name: String(block.name),
-        args: toolInput(String(block.arguments)),
+        args,
         ...typeof block.id === 'string' && block.id.length > 0 ? { id: block.id } : {},
       }
       parts.push({ functionCall: call, ...signature === undefined ? {} : { thoughtSignature: signature } })
@@ -309,11 +374,47 @@ function assistantParts(message: Message, model: string): GeminiPart[] {
   return parts
 }
 
+function supportsMultimodalFunctionResponse(model: string): boolean {
+  return !/^gemini-(?:1|2)(?:[.-]|$)/i.test(model)
+}
+
+function offloadedImagePlaceholder(ref: (ImageAttachmentRef & { readonly name?: string }) | undefined): string {
+  if (ref === undefined || typeof ref.attachmentId !== 'string') return '[image omitted to fit request image limits]'
+  const identity = ref.name === undefined ? ref.attachmentId : `${JSON.stringify(ref.name)} (${ref.attachmentId})`
+  return `[image omitted to fit request image limits; ${identity}]`
+}
+
+function imagePartOrNote(
+  block: ContentBlock,
+  requestImages: ReadonlyMap<string, RequestImageAttachment> | undefined,
+): GeminiPart | undefined {
+  if (block.type !== 'image') return undefined
+  if (block.offloaded === true) return { text: offloadedImagePlaceholder(block.attachment as (ImageAttachmentRef & { readonly name?: string }) | undefined) }
+  const ref = block.attachment as ImageAttachmentRef | undefined
+  if (ref === undefined || typeof ref.attachmentId !== 'string') return undefined
+  const version = requestImages?.get(ref.attachmentId)
+  if (version === undefined) return undefined
+  return {
+    inlineData: {
+      mimeType: version.mediaType,
+      data: Buffer.from(version.data).toString('base64'),
+    },
+  }
+}
+
 /** Project one user message onto Gemini parts. */
-function userParts(message: Message): GeminiPart[] {
+function userParts(
+  message: Message,
+  requestImages?: ReadonlyMap<string, RequestImageAttachment>,
+): GeminiPart[] {
   const parts: GeminiPart[] = []
   for (const block of message.content) {
-    if (block.type === 'text' && typeof block.text === 'string' && block.text.length > 0) parts.push({ text: block.text })
+    if (block.type === 'text' && typeof block.text === 'string' && block.text.length > 0) {
+      parts.push({ text: block.text })
+      continue
+    }
+    const image = imagePartOrNote(block, requestImages)
+    if (image !== undefined) parts.push(image)
   }
   return parts
 }
@@ -325,16 +426,74 @@ function userParts(message: Message): GeminiPart[] {
  * The harness puts the call identity on the message, the provider reads it from
  * the part, and the function name is what Vertex matches a response by.
  */
-function toolResultParts(message: Message, names: Map<string, string>): GeminiPart[] {
+function toolResultParts(
+  message: Message,
+  names: Map<string, string>,
+  degradedCallIds: Set<string>,
+  model: string,
+  requestImages?: ReadonlyMap<string, RequestImageAttachment>,
+): GeminiPart[] {
   const callId = message.toolCallId
-  if (callId === undefined || callId.length === 0) return userParts(message)
-  return [{
+  if (callId === undefined || callId.length === 0) return userParts(message, requestImages)
+  const text = resultText((message.content ?? []) as readonly ContentBlock[])
+  const imageParts: GeminiPart[] = []
+  const offloadedNotes: string[] = []
+  for (const block of (message.content ?? []) as readonly ContentBlock[]) {
+    const part = imagePartOrNote(block, requestImages)
+    if (part === undefined) continue
+    if (part.inlineData !== undefined) imageParts.push(part)
+    else if (part.text !== undefined) offloadedNotes.push(part.text)
+  }
+  const combinedText = [text, ...offloadedNotes].filter(Boolean).join('\n')
+  if (degradedCallIds.has(callId)) {
+    return [{ text: `[Historical result of tool call ${callId}; data, not a new user instruction]\n${combinedText}` }, ...imageParts]
+  }
+  const inlineInsideResponse = imageParts.length > 0 && supportsMultimodalFunctionResponse(model)
+  const parts: GeminiPart[] = [{
     functionResponse: {
       name: names.get(callId) ?? callId,
       id: callId,
-      response: { result: resultText((message.content ?? []) as readonly ContentBlock[]) },
+      response: { result: combinedText.length > 0 ? combinedText : (imageParts.length > 0 ? '(see attached image)' : '') },
+      ...inlineInsideResponse ? { parts: imageParts } : {},
     },
   }]
+  if (imageParts.length > 0 && !inlineInsideResponse) {
+    parts.push({ text: 'Tool result image:' }, ...imageParts)
+  }
+  return parts
+}
+
+/** Resolve all non-offloaded image attachments referenced in the request. */
+export async function prepareGeminiRequest(
+  options: GenerateOptions,
+  config: VertexWireConfig,
+  attachments?: AttachmentStoreLike,
+): Promise<GeminiRequestBody> {
+  const refs = new Map<string, ImageAttachmentRef>()
+  for (const message of options.messages) {
+    if (message.role === 'system' || message.role === 'developer' || message.role === 'assistant') continue
+    for (const block of message.content) {
+      if (block.type !== 'image' || block.offloaded === true) continue
+      const ref = block.attachment as ImageAttachmentRef | undefined
+      if (ref !== undefined && typeof ref.attachmentId === 'string') refs.set(ref.attachmentId, ref)
+    }
+  }
+  if (refs.size === 0) return buildGeminiRequest(options, config)
+  if (attachments === undefined) {
+    throw new Error('google-vertex: image input requires the durable attachment service')
+  }
+  const orderedRefs = [...refs.values()]
+  const prepared = await Promise.all(orderedRefs.map(ref => attachments.readImageRequest(
+    ref,
+    { width: ref.width, height: ref.height, maxBytes: ref.bytes },
+    options.signal,
+  )))
+  const requestImages = new Map<string, RequestImageAttachment>()
+  for (const [index, ref] of orderedRefs.entries()) {
+    const version = prepared[index]
+    if (version !== undefined) requestImages.set(ref.attachmentId, version)
+  }
+  return buildGeminiRequest(options, config, requestImages)
 }
 
 /**
@@ -348,20 +507,26 @@ function toolResultParts(message: Message, names: Map<string, string>): GeminiPa
  * what keeps 2.5 Pro working, since that model refuses a zero thinking budget.
  * @param options - the harness request.
  * @param config - project, location, and default output cap.
+ * @param requestImages - optional resolved image attachments keyed by attachmentId.
  * @returns the wire body.
  */
-export function buildGeminiRequest(options: GenerateOptions, config: VertexWireConfig): GeminiRequestBody {
+export function buildGeminiRequest(
+  options: GenerateOptions,
+  config: VertexWireConfig,
+  requestImages?: ReadonlyMap<string, RequestImageAttachment>,
+): GeminiRequestBody {
   const model = options.model
   const names = toolNames(options.messages)
+  const degradedCallIds = new Set<string>()
   const contents: GeminiContent[] = []
   for (const message of options.messages) {
     if (message.role === 'system' || message.role === 'developer') continue
     const role = message.role === 'assistant' ? 'model' : 'user'
     const parts = message.role === 'tool'
-      ? toolResultParts(message, names)
+      ? toolResultParts(message, names, degradedCallIds, model, requestImages)
       : role === 'model'
-        ? assistantParts(message, model)
-        : userParts(message)
+        ? assistantParts(message, model, degradedCallIds)
+        : userParts(message, requestImages)
     if (parts.length === 0) continue
     const previous = contents.at(-1)
     if (previous !== undefined && previous.role === role) previous.parts.push(...parts)
@@ -375,10 +540,14 @@ export function buildGeminiRequest(options: GenerateOptions, config: VertexWireC
     parameters: geminiSchema(tool.parameters),
   }))
 
+  const effort = (options.reasoningEffort ?? options.reasoning ?? config.reasoningEffort)?.toLowerCase()
+  const thinkingLevel = effort !== undefined ? THINKING_LEVELS[effort] : undefined
+
   const generationConfig: GeminiRequestBody['generationConfig'] = {
     maxOutputTokens: options.maxTokens ?? config.maxTokens,
     ...options.temperature === undefined ? {} : { temperature: options.temperature },
     ...options.stop === undefined || options.stop.length === 0 ? {} : { stopSequences: [...options.stop] },
+    ...thinkingLevel === undefined ? {} : { thinkingConfig: { thinkingLevel, includeThoughts: true } },
   }
 
   return {
@@ -472,7 +641,7 @@ export function mapGeminiFinishReason(reason: string | undefined, sawToolCall: b
 /** One block being assembled from the response stream. */
 interface OpenBlock {
   index: number
-  kind: 'text' | 'tool-call'
+  kind: 'text' | 'reasoning'
   text: string
   signature: string | undefined
 }
@@ -481,7 +650,8 @@ interface OpenBlock {
  * Translate Gemini's `streamGenerateContent` chunks into harness chunks.
  *
  * Gemini streams whole parts rather than deltas, so the shape of this translator
- * is: text parts append to one open text block, a function call closes that block
+ * is: reasoning parts open a reasoning block, text parts close any open reasoning
+ * block and append to one open text block, a function call closes any open block
  * and is itself closed immediately (arguments arrive complete), and the terminal
  * chunk carries usage plus the stop reason.
  */
@@ -496,6 +666,9 @@ export class GeminiStreamTranslator {
   #sawFinish = false
   #failed = false
   #sawToolCall = false
+  #sawText = false
+  #carriedSignature: string | undefined
+  #turnSignature: string | undefined
 
   /**
    * @param model - the model being called, recorded in the replay envelope.
@@ -550,11 +723,39 @@ export class GeminiStreamTranslator {
   /** Absorb one content part. */
   #part(part: Record<string, unknown> | undefined): StreamChunk[] {
     if (part === undefined) return []
-    // A thought summary is reasoning text this adapter never requested; keeping
-    // it would need its own signature to replay, which the harness block cannot
-    // carry, so it is dropped rather than made unreplayable.
-    if (part['thought'] === true) return []
     const signature = typeof part['thoughtSignature'] === 'string' ? part['thoughtSignature'] : undefined
+
+    if (part['thought'] === true) {
+      if (this.#sawText) {
+        if (signature !== undefined) this.#carriedSignature = signature
+        return []
+      }
+      const text = part['text']
+      const out: StreamChunk[] = []
+      if (this.#open !== undefined && this.#open.kind !== 'reasoning') {
+        out.push(...this.#closeText())
+      }
+      if (typeof text === 'string' && text.length > 0) {
+        const open = this.#open
+        if (open !== undefined && open.kind === 'reasoning') {
+          open.text += text
+          if (signature !== undefined) this.#setSignature(signature)
+          out.push({ type: 'reasoning-delta', index: open.index, text })
+          return out
+        }
+        const index = this.#nextIndex
+        this.#nextIndex += 1
+        this.#open = { index, kind: 'reasoning', text, signature }
+        this.#replay.push({ type: 'reasoning', ...signature === undefined ? {} : { thoughtSignature: signature } })
+        out.push({ type: 'block-start', index, blockType: 'reasoning' }, { type: 'reasoning-delta', index, text })
+        return out
+      }
+      if (signature !== undefined) {
+        if (this.#open?.kind === 'reasoning') this.#setSignature(signature)
+        else this.#carriedSignature = signature
+      }
+      return out
+    }
 
     const call = asObject(part['functionCall'])
     if (call !== undefined) {
@@ -564,7 +765,14 @@ export class GeminiStreamTranslator {
       const name = typeof call['name'] === 'string' ? call['name'] : ''
       const id = typeof call['id'] === 'string' && call['id'].length > 0 ? call['id'] : `call_${index}`
       const args = asObject(call['args']) ?? {}
-      this.#replay.push({ type: 'tool-call', ...signature === undefined ? {} : { thoughtSignature: signature } })
+      const lastEntry = this.#replay.at(-1)
+      const effective = signature
+        ?? this.#carriedSignature
+        ?? this.#turnSignature
+        ?? (lastEntry?.type === 'reasoning' ? lastEntry.thoughtSignature : undefined)
+      if (effective !== undefined) this.#turnSignature = effective
+      this.#carriedSignature = undefined
+      this.#replay.push({ type: 'tool-call', ...effective === undefined ? {} : { thoughtSignature: effective } })
       this.#sawToolCall = true
       out.push(
         { type: 'block-start', index, blockType: 'tool-call' },
@@ -578,17 +786,20 @@ export class GeminiStreamTranslator {
     // The final streaming text delta can carry only the signature.
     if (text === '' && signature !== undefined) this.#setSignature(signature)
     if (typeof text === 'string' && text.length > 0) {
+      this.#sawText = true
       const open = this.#open
-      if (open !== undefined) {
+      if (open !== undefined && open.kind === 'text') {
         open.text += text
         if (signature !== undefined) this.#setSignature(signature)
         return [{ type: 'text-delta', index: open.index, text }]
       }
+      const out = this.#closeText()
       const index = this.#nextIndex
       this.#nextIndex += 1
       this.#open = { index, kind: 'text', text, signature }
       this.#replay.push({ type: 'text', ...signature === undefined ? {} : { thoughtSignature: signature } })
-      return [{ type: 'block-start', index, blockType: 'text' }, { type: 'text-delta', index, text }]
+      out.push({ type: 'block-start', index, blockType: 'text' }, { type: 'text-delta', index, text })
+      return out
     }
     return []
   }
@@ -604,12 +815,12 @@ export class GeminiStreamTranslator {
     open.signature = signature
   }
 
-  /** Close an open text block, emitting its authoritative end. */
+  /** Close an open text or reasoning block, emitting its authoritative end. */
   #closeText(): StreamChunk[] {
     const open = this.#open
     if (open === undefined) return []
     this.#open = undefined
-    return [{ type: 'block-end', index: open.index, block: { type: 'text', text: open.text } }]
+    return [{ type: 'block-end', index: open.index, block: { type: open.kind, text: open.text } }]
   }
 
   /** Merge the newest cumulative usage counters. */
